@@ -52,6 +52,8 @@ RSI edge cases are explicit: zero loss with positive gain returns 100; zero gain
 
 The security query accepts `start_date`, `end_date`, `feature_set`, `feature_set_version`, `adjustment_policy=adjusted|raw`, and timezone-aware `as_of`. Unknown securities and unsupported feature-set versions return 404. Invalid ranges, adjustment policies, or naive `as_of` values return 422.
 
+Phase 5 adds an internal batched historical-series consumer for backtests. It uses the same calculator primitives and point-in-time action regimes; it is not a second formula registry. A selected dependency path may skip unrelated families, but selected values are regression-tested against the complete authoritative frame.
+
 ## Persistence decision
 
-Feature definitions and feature sets remain versioned, immutable code contracts; results are calculated on demand. Phase 3.6 adds corporate-action knowledge-time columns/revision links, not persisted feature values. Dataset provenance comes from `data_ingestion_runs` plus a deterministic request-horizon fingerprint. Representative PostgreSQL measurements do not justify a materialized feature store.
+Feature definitions and feature sets remain versioned, immutable code contracts; results are calculated on demand. Phase 3.6 adds corporate-action knowledge-time columns/revision links, not persisted feature values. Phase 5 also keeps historical feature series dynamic and unpersisted. Dataset provenance comes from `data_ingestion_runs` plus deterministic request-horizon fingerprints. Representative PostgreSQL measurements do not justify a materialized feature store.

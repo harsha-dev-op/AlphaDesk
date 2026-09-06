@@ -1,9 +1,9 @@
-# AlphaDesk Phase 4 architecture
+# AlphaDesk Phase 5 architecture
 
 ## Request flow
 
 ```text
-React/Vite UI → typed API client → FastAPI routes → strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
+React/Vite UI → typed API client → FastAPI routes → backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
                                       ↘ immutable registries / quality / calendar / adjustments
 ```
 
@@ -83,6 +83,28 @@ evaluation API → StrategyService → historical index membership
 
 The strategy set includes Core v1 unchanged plus `PRIOR_HIGH_20` and `BREAKOUT_PCT_20`. The code registry is the authoritative executable source. The existing `strategy_definitions` table stays metadata-only because its compact schema cannot model typed rules and parameters without unnecessary migration complexity. Evaluations are dynamic and unpersisted. See [strategy engine specification](strategy_engine.md).
 
+## Phase 5 backtest flow
+
+```text
+backtest metadata API ─────────→ strategy/profile/cost registries
+
+run API → BacktestService → overlapping historical membership intervals
+              ↓
+     batched projected price/action reads + calendar range
+              ↓
+ HistoricalTechnicalSeriesService → authoritative selected feature formulas
+              ↓
+ immutable Phase 4 rule evaluation → deterministic SetupEvents
+              ↓
+ NEXT_OPEN_FIXED_HOLD v1 simulator → India cash-delivery costs
+              ↓
+ full-trade analytics + yearly/OOS rows + bounded preview + fingerprints
+```
+
+Decision data is capped at each exchange-close timestamp; outcome data enters only after a matched setup. Feature rows are computed once per security and action-knowledge regime, never by issuing per-date Phase 4 evaluations. Entry and exit prices are RAW even when features are ADJUSTED. Historical membership controls signal eligibility but does not force an open trade to exit.
+
+Backtest profiles and cost models are separate frozen registries, so execution assumptions do not mutate Phase 4 strategy meaning. Results are calculated on demand; no persistence table or migration is added. See [backtesting engine specification](backtesting_engine.md).
+
 ## Boundary for later phases
 
-No order, recommendation, broker, portfolio, backtest, ranking, ML, or alert execution exists. The scanner and strategy engine are read-only. `strategy_definitions` is metadata only. The recommended next boundary is a point-in-time Indian-market backtesting engine that consumes immutable strategy definitions; Phase 4 does not implement it.
+No order, recommendation, broker, capital allocator, portfolio risk engine, ranking, ML, or alert execution exists. Scanner, strategy, and backtest APIs are read-only research calculations. `strategy_definitions` remains metadata only. The recommended next boundary is a capital-ledger-based portfolio/risk simulator that consumes Phase 5 events without mutating the existing strategy or profile versions.

@@ -67,7 +67,13 @@ class SecurityRepository:
             statement = statement.where(DailyPrice.trading_date <= end)
         return list(self.session.scalars(statement.order_by(DailyPrice.trading_date)))
 
-    def prices_for_securities(self, security_ids: list[UUID], *, end: date) -> dict[UUID, list[PriceRecord]]:
+    def prices_for_securities(
+        self,
+        security_ids: list[UUID],
+        *,
+        end: date,
+        start: date | None = None,
+    ) -> dict[UUID, list[PriceRecord]]:
         grouped: dict[UUID, list[PriceRecord]] = {security_id: [] for security_id in security_ids}
         if not security_ids:
             return grouped
@@ -86,9 +92,37 @@ class SecurityRepository:
             .where(DailyPrice.security_id.in_(security_ids), DailyPrice.trading_date <= end)
             .order_by(DailyPrice.security_id, DailyPrice.trading_date)
         )
+        if start is not None:
+            statement = statement.where(DailyPrice.trading_date >= start)
         for row in self.session.execute(statement):
             record = PriceRecord(*row)
             grouped[record.security_id].append(record)
+        return grouped
+
+    def corporate_action_history_for_securities(
+        self,
+        security_ids: list[UUID],
+        *,
+        as_of: datetime,
+    ) -> dict[UUID, list[CorporateAction]]:
+        """Load eligible revision rows without collapsing their historical states."""
+        grouped = {security_id: [] for security_id in security_ids}
+        if not security_ids:
+            return grouped
+        rows = self.session.scalars(
+            select(CorporateAction)
+            .where(
+                CorporateAction.security_id.in_(security_ids),
+                CorporateAction.available_at <= as_of,
+            )
+            .order_by(
+                CorporateAction.security_id,
+                CorporateAction.available_at,
+                CorporateAction.id,
+            )
+        )
+        for action in rows:
+            grouped[action.security_id].append(action)
         return grouped
 
     @staticmethod

@@ -26,6 +26,18 @@ class TradingCalendarRepository:
             )
         )
 
+    def entries(self, exchange: str, start: date, end: date) -> list[TradingCalendar]:
+        return list(
+            self.session.scalars(
+                select(TradingCalendar)
+                .where(
+                    TradingCalendar.exchange == exchange,
+                    TradingCalendar.trading_date.between(start, end),
+                )
+                .order_by(TradingCalendar.trading_date)
+            )
+        )
+
     def entries_for_dates(self, exchange_dates: set[tuple[str, date]]) -> dict[tuple[str, date], TradingCalendar]:
         if not exchange_dates:
             return {}

@@ -34,3 +34,20 @@ class IndexRepository:
             .order_by(IndexMembership.security_id)
         )
         return list(self.session.scalars(statement))
+
+    def memberships_between(self, index_id, start: date, end: date) -> list[IndexMembership]:
+        statement = (
+            select(IndexMembership)
+            .options(joinedload(IndexMembership.security))
+            .where(
+                IndexMembership.index_id == index_id,
+                IndexMembership.valid_from <= end,
+                or_(IndexMembership.valid_to.is_(None), IndexMembership.valid_to >= start),
+            )
+            .order_by(
+                IndexMembership.valid_from,
+                IndexMembership.security_id,
+                IndexMembership.id,
+            )
+        )
+        return list(self.session.scalars(statement))

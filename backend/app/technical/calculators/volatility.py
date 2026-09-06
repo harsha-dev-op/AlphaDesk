@@ -43,13 +43,25 @@ def annualized_volatility(daily_returns: list[Decimal | None], index: int, windo
     return variance.sqrt() * Decimal(252).sqrt()
 
 
-def calculate_volatility(highs: list[Decimal], lows: list[Decimal], closes: list[Decimal], output: list[dict[str, FeatureValue]]) -> None:
-    true_ranges = true_range_series(highs, lows, closes)
-    atr = atr_series(true_ranges)
-    daily_returns = daily_return_series(closes)
+def calculate_volatility(
+    highs: list[Decimal],
+    lows: list[Decimal],
+    closes: list[Decimal],
+    output: list[dict[str, FeatureValue]],
+    feature_codes: set[str] | None = None,
+) -> None:
+    requested = {"TRUE_RANGE", "ATR_14", "ATR_PCT_14", "VOLATILITY_20", "VOLATILITY_60"} if feature_codes is None else feature_codes
+    needs_atr = bool(requested & {"TRUE_RANGE", "ATR_14", "ATR_PCT_14"})
+    true_ranges = true_range_series(highs, lows, closes) if needs_atr else []
+    atr = atr_series(true_ranges) if needs_atr else []
+    volatility_windows = [window for window in (20, 60) if f"VOLATILITY_{window}" in requested]
+    daily_returns = daily_return_series(closes) if volatility_windows else []
     for index in range(len(closes)):
-        output[index]["TRUE_RANGE"] = true_ranges[index]
-        output[index]["ATR_14"] = atr[index]
-        output[index]["ATR_PCT_14"] = divide(atr[index], closes[index]) if atr[index] is not None else None
-        for window in (20, 60):
+        if "TRUE_RANGE" in requested:
+            output[index]["TRUE_RANGE"] = true_ranges[index]
+        if "ATR_14" in requested:
+            output[index]["ATR_14"] = atr[index]
+        if "ATR_PCT_14" in requested:
+            output[index]["ATR_PCT_14"] = divide(atr[index], closes[index]) if atr[index] is not None else None
+        for window in volatility_windows:
             output[index][f"VOLATILITY_{window}"] = annualized_volatility(daily_returns, index, window)
