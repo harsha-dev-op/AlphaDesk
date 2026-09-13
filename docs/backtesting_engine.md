@@ -154,4 +154,10 @@ The query pattern is `4 + 2 × ceil(member_count / 50)`: index, overlapping memb
 - Results are independent fixed-notional events, not portfolio accounting.
 - Rolling windows, saved experiments, concurrent-load testing, persistence, capital allocation, portfolio risk, shorting, leverage, derivatives, intraday behavior, optimization, ML, brokers, paper trading, and live trading are not implemented.
 
-The next recommended phase is a separate versioned portfolio/risk simulation layer that consumes Phase 5 setup/trade events and introduces an explicit capital ledger, allocation, cash constraints, concurrency, exposure, and portfolio-valid risk statistics. It must not mutate Phase 4 strategies or Phase 5 backtest-profile versions.
+The originally recommended next boundary was a separate versioned portfolio/risk simulation layer consuming Phase 5's authoritative setup and execution inputs without mutating Phase 4 strategies or Phase 5 profiles. Phase 6 implements that boundary as described below.
+
+## Phase 6 consumer
+
+Phase 6 now implements that boundary as a separate service and immutable portfolio-policy registry. A small internal extraction, `BacktestService.prepare_research`, exposes the exact historical setup stream and loaded point-in-time series to both consumers. Phase 5 still simulates independent fixed-notional trades and returns the same controlled config/dataset/run/trade fingerprints; it does not silently acquire capital constraints or portfolio statistics.
+
+The portfolio consumer reuses public Phase 5 slippage, intraday-exit, split/bonus, cost calculation, metadata, and aggregate-cost helpers. It adds finite cash, deterministic equal-slot sizing, concurrent-position and exposure entry constraints, daily marks, a cash ledger, and portfolio-valid analytics without changing `NEXT_OPEN_FIXED_HOLD` v1 or the cost-model version. See [the Phase 6 portfolio/risk specification](portfolio_risk_engine.md).

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP, localcontext
@@ -77,10 +78,10 @@ class TradeSimulator:
 
     def simulate(
         self,
-        setups: list[SetupEvent],
+        setups: Sequence[SetupEvent],
         *,
         series_by_security: dict[UUID, HistoricalSecuritySeries],
-        sessions: list[TradingCalendar],
+        sessions: Sequence[TradingCalendar],
         profile: BacktestProfileDefinition,
         settings: SimulationSettings,
         costs: IndiaCashDeliveryCostCalculator,
@@ -116,7 +117,7 @@ class TradeSimulator:
                 continue
 
             raw_entry = Decimal(entry_row.open)
-            slipped_entry = self._slipped(raw_entry, settings.slippage_bps, side="BUY")
+            slipped_entry = self.slipped_price(raw_entry, settings.slippage_bps, side="BUY")
             quantity = int(
                 (settings.trade_notional_inr / slipped_entry).to_integral_value(rounding=ROUND_FLOOR)
             )
@@ -190,7 +191,7 @@ class TradeSimulator:
             for index in range(entry_index, path_last_index + 1):
                 session = sessions[index]
                 if index > entry_index:
-                    current_quantity, stop, target = self._apply_actions(
+                    current_quantity, stop, target = self.apply_actions(
                         series.action_history,
                         session,
                         current_quantity,
@@ -207,7 +208,7 @@ class TradeSimulator:
                 raw_high = Decimal(row.high)
                 raw_low = Decimal(row.low)
                 quantity_factor = current_quantity / initial_quantity
-                day_exit_reason, day_base, day_warning = self._intraday_exit(
+                day_exit_reason, day_base, day_warning = self.intraday_exit(
                     raw_open,
                     raw_high,
                     raw_low,
@@ -243,7 +244,7 @@ class TradeSimulator:
                     if index >= len(sessions):
                         break
                     session = sessions[index]
-                    current_quantity, stop, target = self._apply_actions(
+                    current_quantity, stop, target = self.apply_actions(
                         series.action_history,
                         session,
                         current_quantity,
@@ -272,7 +273,7 @@ class TradeSimulator:
 
             entry_turnover = slipped_entry * initial_quantity
             entry_cost = costs.calculate(entry_turnover, "BUY")
-            slipped_exit = self._slipped(base_exit, settings.slippage_bps, side="SELL") if base_exit is not None else None
+            slipped_exit = self.slipped_price(base_exit, settings.slippage_bps, side="SELL") if base_exit is not None else None
             exit_cost = costs.calculate(slipped_exit * current_quantity, "SELL") if slipped_exit is not None else None
             gross_pnl = money(slipped_exit * current_quantity - entry_turnover) if slipped_exit is not None else None
             total_costs = money(entry_cost.total_charges + exit_cost.total_charges) if exit_cost is not None else None
@@ -355,12 +356,12 @@ class TradeSimulator:
             )
 
     @staticmethod
-    def _slipped(base: Decimal, bps: Decimal, *, side: str) -> Decimal:
+    def slipped_price(base: Decimal, bps: Decimal, *, side: str) -> Decimal:
         direction = Decimal(1) if side == "BUY" else Decimal(-1)
         return _price(base * (Decimal(1) + direction * bps / Decimal(10000)))
 
     @staticmethod
-    def _intraday_exit(
+    def intraday_exit(
         open_price: Decimal,
         high: Decimal,
         low: Decimal,
@@ -381,7 +382,7 @@ class TradeSimulator:
             return "PROFIT_TARGET", target, None
         return None, None, None
 
-    def _apply_actions(
+    def apply_actions(
         self,
         action_history: tuple[CorporateAction, ...],
         session: TradingCalendar,

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 from app.backtests.definitions import CostModelDefinition
 from app.backtests.fingerprints import fingerprint
-from app.schemas.backtests import CostBreakdown, CostModelMetadata
+from app.schemas.backtests import AggregateCostBreakdown, CostBreakdown, CostModelMetadata
 
 PAISE = Decimal("0.01")
 RUPEE = Decimal("1")
@@ -12,6 +13,26 @@ RUPEE = Decimal("1")
 
 def money(value: Decimal) -> Decimal:
     return value.quantize(PAISE, rounding=ROUND_HALF_UP)
+
+
+def aggregate_cost_breakdowns(
+    legs: Sequence[CostBreakdown],
+    *,
+    broker_costs_excluded: bool,
+) -> AggregateCostBreakdown:
+    return AggregateCostBreakdown(
+        stt=money(sum((leg.stt for leg in legs), Decimal(0))),
+        exchange_transaction_charge=money(
+            sum((leg.exchange_transaction_charge for leg in legs), Decimal(0))
+        ),
+        sebi_charge=money(sum((leg.sebi_charge for leg in legs), Decimal(0))),
+        gst=money(sum((leg.gst for leg in legs), Decimal(0))),
+        stamp_duty=money(sum((leg.stamp_duty for leg in legs), Decimal(0))),
+        brokerage=money(sum((leg.brokerage for leg in legs), Decimal(0))),
+        dp_charge=money(sum((leg.dp_charge for leg in legs), Decimal(0))),
+        total=money(sum((leg.total_charges for leg in legs), Decimal(0))),
+        broker_specific_costs_excluded=broker_costs_excluded,
+    )
 
 
 def cost_model_metadata(
@@ -128,6 +149,7 @@ class IndiaCashDeliveryCostCalculator:
 
 __all__ = [
     "IndiaCashDeliveryCostCalculator",
+    "aggregate_cost_breakdowns",
     "cost_fingerprint",
     "cost_model_metadata",
     "money",

@@ -1,9 +1,9 @@
-# AlphaDesk Phase 5 architecture
+# AlphaDesk Phase 6 architecture
 
 ## Request flow
 
 ```text
-React/Vite UI → typed API client → FastAPI routes → backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
+React/Vite UI → typed API client → FastAPI routes → portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
                                       ↘ immutable registries / quality / calendar / adjustments
 ```
 
@@ -107,4 +107,11 @@ Backtest profiles and cost models are separate frozen registries, so execution a
 
 ## Boundary for later phases
 
-No order, recommendation, broker, capital allocator, portfolio risk engine, ranking, ML, or alert execution exists. Scanner, strategy, and backtest APIs are read-only research calculations. `strategy_definitions` remains metadata only. The recommended next boundary is a capital-ledger-based portfolio/risk simulator that consumes Phase 5 events without mutating the existing strategy or profile versions.
+No order, recommendation, broker, ranking, optimization, ML, or alert execution exists. Scanner, strategy, backtest, and portfolio APIs are read-only research calculations. `strategy_definitions` remains metadata only. Multi-strategy capital composition and saved experiment provenance remain possible later boundaries; neither is part of Phase 6.
+## Phase 6 portfolio and risk boundary
+
+Phase 6 adds an on-demand `PortfolioService` above the unchanged Phase 4 strategy and Phase 5 historical execution layers. `BacktestService.prepare_research` is the single reusable path for historical membership, calendar, feature-series, setup, and dataset construction; the Phase 5 backtest service and Phase 6 portfolio service both consume it. Portfolio allocation does not enter the Strategy Registry, and the Phase 5 independent-trade API keeps its original semantics and deterministic fingerprints.
+
+The frozen `LONG_ONLY_EQUAL_SLOT_PORTFOLIO` v1 definition owns finite-capital rules. `PortfolioSimulator` processes an explicit daily order—pre-open actions, open exits, session-start state, symbol-ordered candidates, entries, intraday exits, close marks—against one non-negative Decimal cash balance. Cash movements form an append-only typed ledger. Daily RAW-close marks plus mark-to-last warnings feed a separate analytics module for return, CAGR, sample volatility, effective-daily-risk-free Sharpe/Sortino, drawdown/Calmar, turnover, exposure, and position statistics.
+
+The module is read-only with respect to PostgreSQL. It adds no schema, stored run, cache, snapshot, feature store, or queue. See [the Phase 6 portfolio/risk specification](portfolio_risk_engine.md).

@@ -577,3 +577,248 @@ export interface BacktestRunResponse {
   timings: { data_load_ms: number; feature_series_ms: number; condition_evaluation_ms: number; trade_simulation_ms: number; cost_and_analytics_ms: number; response_build_ms: number; total_service_ms: number };
   executed_at: string;
 }
+
+export interface PortfolioPolicyMetadata {
+  policy_code: string;
+  policy_version: string;
+  display_name: string;
+  compatible_profiles: string[];
+  default_initial_capital_inr: string;
+  default_max_concurrent_positions: number;
+  default_max_position_weight: string;
+  default_max_gross_exposure: string;
+  default_minimum_cash_reserve_pct: string;
+  allocation_policy: string;
+  candidate_selection_policy: string;
+  integer_share_policy: string;
+  same_security_policy: string;
+  same_session_event_order: string[];
+  end_policy: string;
+  mark_to_market_policy: string;
+  risk_free_rate_convention: string;
+  leverage_policy: string;
+  rebalancing_policy: string;
+  policy_fingerprint: string;
+}
+
+export interface PortfolioMetadata {
+  policies: PortfolioPolicyMetadata[];
+  profiles: BacktestProfileMetadata[];
+  cost_models: BacktestCostModelMetadata[];
+  strategies: StrategyMetadata[];
+  universes: ScannerUniverse[];
+  adjustment_policies: ('RAW' | 'ADJUSTED')[];
+  parameter_bounds: Record<string, { minimum: string | number; maximum: string | number; default: string | number | null }>;
+  allocation_semantics: Record<string, string>;
+  metric_definitions: Record<string, string>;
+  hard_request_limits: Record<string, number>;
+  latest_observation_date: string | null;
+  research_disclaimer: string;
+}
+
+export interface PortfolioRunRequest {
+  strategy_code: string;
+  strategy_version: string;
+  parameter_overrides: Record<string, StrategyScalar>;
+  universe: string;
+  start_date: string;
+  end_date: string;
+  adjustment_policy: 'RAW' | 'ADJUSTED';
+  profile_code: string;
+  profile_version: string;
+  holding_sessions: number;
+  slippage_bps: string;
+  stop_loss_pct: string | null;
+  profit_target_pct: string | null;
+  max_exit_delay_sessions: number;
+  cost_model_code: string;
+  cost_model_version: string;
+  brokerage_per_order_inr: string;
+  brokerage_rate: string;
+  dp_charge_per_scrip_sell_day_inr: string;
+  portfolio_policy_code: string;
+  portfolio_policy_version: string;
+  initial_capital_inr: string;
+  max_concurrent_positions: number;
+  max_position_weight: string;
+  max_gross_exposure: string;
+  minimum_cash_reserve_pct: string;
+  risk_free_rate_annual: string;
+  out_of_sample_start_date: string | null;
+  position_detail_limit: number;
+  ledger_detail_limit: number;
+}
+
+export interface PortfolioCashLedgerEvent {
+  sequence: number;
+  ledger_event_id: string;
+  session_date: string;
+  security_id: string | null;
+  symbol: string | null;
+  event_type: 'INITIAL_CAPITAL' | 'ENTRY_PRINCIPAL' | 'ENTRY_COST' | 'EXIT_PROCEEDS' | 'EXIT_COST';
+  gross_amount: string;
+  cost_amount: string;
+  net_cash_change: string;
+  resulting_cash_balance: string;
+  position_id: string | null;
+  event_fingerprint: string;
+}
+
+export interface PortfolioRejectedCandidate {
+  candidate_id: string;
+  security_id: string;
+  symbol: string;
+  signal_date: string;
+  intended_entry_date: string | null;
+  reason: string;
+  signal_fingerprint: string;
+  candidate_fingerprint: string;
+}
+
+export interface PortfolioPosition {
+  position_id: string;
+  security_id: string;
+  symbol: string;
+  company_name: string;
+  strategy_code: string;
+  strategy_version: string;
+  strategy_fingerprint: string;
+  signal_date: string;
+  signal_fingerprint: string;
+  portfolio_policy_code: string;
+  portfolio_policy_version: string;
+  profile_code: string;
+  profile_version: string;
+  cost_model_code: string;
+  cost_model_version: string;
+  entry_date: string;
+  entry_raw_price: string;
+  entry_slipped_price: string;
+  initial_quantity: number;
+  current_quantity: string;
+  entry_turnover: string;
+  entry_costs: BacktestCostBreakdown;
+  cost_basis: string;
+  entry_portfolio_weight: string;
+  stop_price: string | null;
+  target_price: string | null;
+  corporate_action_events: BacktestTrade['corporate_action_events'];
+  exit_date: string | null;
+  exit_raw_price: string | null;
+  exit_slipped_price: string | null;
+  exit_reason: 'TIME_EXIT' | 'STOP_LOSS' | 'PROFIT_TARGET' | 'FORCED_END_OF_TEST' | 'EXIT_PRICE_UNAVAILABLE';
+  exit_turnover: string | null;
+  exit_costs: BacktestCostBreakdown | null;
+  gross_pnl: string | null;
+  net_pnl: string | null;
+  net_return: string | null;
+  portfolio_contribution: string | null;
+  holding_sessions: number;
+  warnings: string[];
+  position_fingerprint: string;
+}
+
+export interface DailyPortfolioSnapshot {
+  session_date: string;
+  cash: string;
+  gross_market_value: string;
+  portfolio_equity: string;
+  realized_pnl_to_date: string;
+  unrealized_pnl: string;
+  daily_costs: string;
+  cumulative_costs: string;
+  open_position_count: number;
+  gross_exposure_pct: string | null;
+  cash_pct: string | null;
+  daily_return: string | null;
+  drawdown_pct: string | null;
+  stale_mark_count: number;
+  warnings: string[];
+}
+
+export interface PortfolioMetrics {
+  initial_capital: string;
+  ending_equity: string;
+  net_portfolio_pnl: string;
+  total_portfolio_return: string;
+  cagr: string | null;
+  annualized_volatility: string | null;
+  sharpe_ratio: string | null;
+  sortino_ratio: string | null;
+  drawdown: { max_drawdown_pct: string | null; max_drawdown_inr: string | null; peak_date: string | null; trough_date: string | null; recovery_date: string | null; duration_sessions: number | null };
+  calmar_ratio: string | null;
+  average_gross_exposure: string | null;
+  maximum_gross_exposure: string | null;
+  average_cash_pct: string | null;
+  minimum_cash: string;
+  average_open_positions: string | null;
+  maximum_open_positions: number;
+  total_traded_turnover: string;
+  portfolio_turnover: string | null;
+  total_modeled_transaction_costs: string;
+  cost_drag: string | null;
+  entry_count: number;
+  exit_count: number;
+  profitable_positions: number;
+  losing_positions: number;
+  breakeven_positions: number;
+  portfolio_win_rate: string | null;
+  average_realized_position_return: string | null;
+  median_realized_position_return: string | null;
+  warnings: string[];
+}
+
+export interface PortfolioSegmentMetrics {
+  label: 'IN_SAMPLE' | 'OUT_OF_SAMPLE';
+  start_date: string | null;
+  end_date: string | null;
+  starting_equity: string | null;
+  ending_equity: string | null;
+  total_return: string | null;
+  cagr: string | null;
+  annualized_volatility: string | null;
+  sharpe_ratio: string | null;
+  sortino_ratio: string | null;
+  max_drawdown_pct: string | null;
+  warnings: string[];
+}
+
+export interface PortfolioRunResponse {
+  normalized_request: PortfolioRunRequest;
+  strategy: StrategyMetadata;
+  effective_parameters: Record<string, StrategyScalar>;
+  profile: BacktestProfileMetadata;
+  cost_model: BacktestCostModelMetadata;
+  portfolio_policy: PortfolioPolicyMetadata;
+  universe: ScannerUniverse;
+  dataset: BacktestRunResponse['dataset'];
+  config_fingerprint: string;
+  dataset_fingerprint: string;
+  run_fingerprint: string;
+  historical_sessions_processed: number;
+  setup_count: number;
+  accepted_entry_count: number;
+  rejected_candidate_count: number;
+  rejected_candidate_reasons: Record<string, number>;
+  closed_position_count: number;
+  metrics: PortfolioMetrics;
+  cost_analytics: BacktestRunResponse['cost_analytics'];
+  oos_metrics: PortfolioSegmentMetrics[];
+  warnings: string[];
+  daily_equity_curve: DailyPortfolioSnapshot[];
+  total_position_count: number;
+  returned_position_count: number;
+  positions_truncated: boolean;
+  position_order: 'ENTRY_DATE_SYMBOL_POSITION_ID_ASC';
+  positions: PortfolioPosition[];
+  total_ledger_event_count: number;
+  returned_ledger_event_count: number;
+  ledger_truncated: boolean;
+  ledger_order: 'SESSION_SEQUENCE_ASC';
+  ledger_events: PortfolioCashLedgerEvent[];
+  returned_rejected_candidate_count: number;
+  rejected_candidates_truncated: boolean;
+  rejected_candidates: PortfolioRejectedCandidate[];
+  timings: { data_load_ms: number; technical_series_ms: number; setup_generation_ms: number; allocation_and_accounting_ms: number; risk_analytics_ms: number; response_build_ms: number; total_service_ms: number };
+  executed_at: string;
+}

@@ -1,4 +1,4 @@
-import type { BacktestMetadata, BacktestRunRequest, BacktestRunResponse, FeatureCatalog, FeatureSetCatalog, HealthResponse, MarketScanRequest, MarketScanResponse, PriceSeries, QualityResponse, ScannerMetadata, SecuritiesPage, Security, SecurityFeatureSeries, StrategyCatalog, StrategyEvaluationRequest, StrategyEvaluationResponse } from '@/src/types/api';
+import type { BacktestMetadata, BacktestRunRequest, BacktestRunResponse, FeatureCatalog, FeatureSetCatalog, HealthResponse, MarketScanRequest, MarketScanResponse, PortfolioMetadata, PortfolioRunRequest, PortfolioRunResponse, PriceSeries, QualityResponse, ScannerMetadata, SecuritiesPage, Security, SecurityFeatureSeries, StrategyCatalog, StrategyEvaluationRequest, StrategyEvaluationResponse } from '@/src/types/api';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -44,4 +44,6 @@ export const api = {
   evaluateStrategy: (payload: StrategyEvaluationRequest, signal?: AbortSignal) => request<StrategyEvaluationResponse>('/api/v1/strategies/evaluate', signal, { method: 'POST', body: JSON.stringify(payload) }),
   backtestMetadata: (signal?: AbortSignal) => request<BacktestMetadata>('/api/v1/backtests/metadata', signal),
   runBacktest: (payload: BacktestRunRequest, signal?: AbortSignal) => request<BacktestRunResponse>('/api/v1/backtests/run', signal, { method: 'POST', body: JSON.stringify(payload) }),
+  portfolioMetadata: (signal?: AbortSignal) => request<PortfolioMetadata>('/api/v1/portfolio/metadata', signal),
+  runPortfolio: (payload: PortfolioRunRequest, signal?: AbortSignal) => request<PortfolioRunResponse>('/api/v1/portfolio/run', signal, { method: 'POST', body: JSON.stringify(payload) }),
 };

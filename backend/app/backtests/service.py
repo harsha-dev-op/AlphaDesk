@@ -2,18 +2,25 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.backtests.analytics import calculate_analytics, period_breakdown
-from app.backtests.costs import IndiaCashDeliveryCostCalculator, cost_fingerprint, cost_model_metadata, money
-from app.backtests.definitions import BacktestProfileDefinition
+from app.backtests.costs import (
+    IndiaCashDeliveryCostCalculator,
+    aggregate_cost_breakdowns,
+    cost_fingerprint,
+    cost_model_metadata,
+)
+from app.backtests.definitions import BacktestProfileDefinition, CostModelDefinition
 from app.backtests.fingerprints import fingerprint
 from app.backtests.registry import cost_model_catalog, find_cost_model, find_profile, profile_catalog
 from app.backtests.simulator import SetupEvent, SimulationSettings, TradeSimulator
-from app.models import IndexMembership, MarketIndex, TradingCalendar
+from app.models import IndexMembership, MarketIndex, Security, TradingCalendar
 from app.repositories.calendar import TradingCalendarRepository
 from app.repositories.indices import IndexRepository
 from app.repositories.securities import SecurityRepository
@@ -30,6 +37,7 @@ from app.schemas.backtests import (
 )
 from app.schemas.scanner import ScannerUniverseMetadata
 from app.strategies.registry import strategy_catalog
+from app.strategies.definitions import ParameterValue, StrategyDefinition
 from app.strategies.service import (
     StrategyService,
     _condition_passes,
@@ -37,8 +45,9 @@ from app.strategies.service import (
     strategy_fingerprint,
     strategy_metadata,
 )
+from app.technical.definitions import FeatureSetDefinition
 from app.technical.registry import FEATURE_DEFINITIONS, find_feature_set
-from app.technical.series import HistoricalTechnicalSeriesService
+from app.technical.series import HistoricalFeatureBatch, HistoricalSecuritySeries, HistoricalTechnicalSeriesService
 
 RESEARCH_DISCLAIMER = (
     "Historical simulation for research only — not investment advice. "
@@ -54,6 +63,32 @@ class BacktestValidationError(ValueError):
 
 class BacktestNotFoundError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedBacktestResearch:
+    request: BacktestRunRequest
+    normalized_request: BacktestRunRequest
+    definition: StrategyDefinition
+    feature_set: FeatureSetDefinition
+    parameters: dict[str, ParameterValue]
+    profile: BacktestProfileDefinition
+    cost_definition: CostModelDefinition
+    holding_sessions: int
+    strategy_fingerprint: str
+    profile_fingerprint: str
+    cost_fingerprint: str
+    config_fingerprint: str
+    market_index: MarketIndex
+    memberships: tuple[IndexMembership, ...]
+    securities: tuple[Security, ...]
+    sessions: tuple[TradingCalendar, ...]
+    series_batch: HistoricalFeatureBatch
+    series_by_security: dict[UUID, HistoricalSecuritySeries]
+    setups: tuple[SetupEvent, ...]
+    dataset_fingerprint: str
+    universe_and_calendar_ms: float
+    condition_evaluation_ms: float
 
 
 def _universe_metadata(index: MarketIndex) -> ScannerUniverseMetadata:
@@ -114,20 +149,10 @@ def profile_metadata(profile: BacktestProfileDefinition) -> ProfileMetadata:
     )
 
 
-def _aggregate_costs(trades: list[SimulatedTrade], *, broker_costs_excluded: bool) -> AggregateCostBreakdown:
+def aggregate_costs(trades: list[SimulatedTrade], *, broker_costs_excluded: bool) -> AggregateCostBreakdown:
     legs = [trade.entry_cost for trade in trades]
     legs.extend(trade.exit_cost for trade in trades if trade.exit_cost is not None)
-    return AggregateCostBreakdown(
-        stt=money(sum((leg.stt for leg in legs), Decimal(0))),
-        exchange_transaction_charge=money(sum((leg.exchange_transaction_charge for leg in legs), Decimal(0))),
-        sebi_charge=money(sum((leg.sebi_charge for leg in legs), Decimal(0))),
-        gst=money(sum((leg.gst for leg in legs), Decimal(0))),
-        stamp_duty=money(sum((leg.stamp_duty for leg in legs), Decimal(0))),
-        brokerage=money(sum((leg.brokerage for leg in legs), Decimal(0))),
-        dp_charge=money(sum((leg.dp_charge for leg in legs), Decimal(0))),
-        total=money(sum((leg.total_charges for leg in legs), Decimal(0))),
-        broker_specific_costs_excluded=broker_costs_excluded,
-    )
+    return aggregate_cost_breakdowns(legs, broker_costs_excluded=broker_costs_excluded)
 
 
 def _membership_active(membership: IndexMembership, day: date) -> bool:
@@ -176,8 +201,8 @@ class BacktestService:
             raise BacktestNotFoundError(f"Unsupported backtest profile version: {code} v{version}")
         raise BacktestNotFoundError(f"Unknown backtest profile: {code}")
 
-    def run(self, request: BacktestRunRequest) -> BacktestRunResponse:
-        started = time.perf_counter()
+    def prepare_research(self, request: BacktestRunRequest) -> PreparedBacktestResearch:
+        """Build the authoritative PIT setup stream and reusable historical inputs."""
         definition = StrategyService._resolve_strategy(request.strategy_code, request.strategy_version)
         feature_set = find_feature_set(definition.required_feature_set, definition.required_feature_set_version)
         if feature_set is None:
@@ -344,6 +369,54 @@ class BacktestService:
                 },
             }
         )
+        return PreparedBacktestResearch(
+            request=request,
+            normalized_request=normalized_request,
+            definition=definition,
+            feature_set=feature_set,
+            parameters=parameters,
+            profile=profile,
+            cost_definition=cost_definition,
+            holding_sessions=holding_sessions,
+            strategy_fingerprint=strategy_definition_fingerprint,
+            profile_fingerprint=profile_definition_fingerprint,
+            cost_fingerprint=effective_cost_fingerprint,
+            config_fingerprint=config_fingerprint,
+            market_index=market_index,
+            memberships=tuple(memberships),
+            securities=tuple(securities),
+            sessions=tuple(session_rows),
+            series_batch=series_batch,
+            series_by_security=series_by_security,
+            setups=tuple(setups),
+            dataset_fingerprint=dataset_fingerprint,
+            universe_and_calendar_ms=universe_and_calendar_ms,
+            condition_evaluation_ms=condition_evaluation_ms,
+        )
+
+    def run(self, request: BacktestRunRequest) -> BacktestRunResponse:
+        started = time.perf_counter()
+        prepared = self.prepare_research(request)
+        definition = prepared.definition
+        parameters = prepared.parameters
+        profile = prepared.profile
+        cost_definition = prepared.cost_definition
+        holding_sessions = prepared.holding_sessions
+        normalized_request = prepared.normalized_request
+        strategy_definition_fingerprint = prepared.strategy_fingerprint
+        profile_definition_fingerprint = prepared.profile_fingerprint
+        effective_cost_fingerprint = prepared.cost_fingerprint
+        config_fingerprint = prepared.config_fingerprint
+        market_index = prepared.market_index
+        memberships = prepared.memberships
+        securities = prepared.securities
+        session_rows = prepared.sessions
+        series_batch = prepared.series_batch
+        series_by_security = prepared.series_by_security
+        setups = prepared.setups
+        dataset_fingerprint = prepared.dataset_fingerprint
+        universe_and_calendar_ms = prepared.universe_and_calendar_ms
+        condition_evaluation_ms = prepared.condition_evaluation_ms
 
         phase = time.perf_counter()
         calculator = IndiaCashDeliveryCostCalculator(
@@ -402,7 +475,7 @@ class BacktestService:
             and request.brokerage_rate == 0
             and request.dp_charge_per_scrip_sell_day_inr == 0
         )
-        aggregate_costs = _aggregate_costs(trades, broker_costs_excluded=broker_costs_excluded)
+        aggregate_cost_breakdown = aggregate_costs(trades, broker_costs_excluded=broker_costs_excluded)
         cost_and_analytics_ms = (time.perf_counter() - phase) * 1_000
 
         run_fingerprint = fingerprint(
@@ -459,7 +532,7 @@ class BacktestService:
             skipped_setup_count=sum(simulation.skipped_reasons.values()),
             skipped_setup_reasons=simulation.skipped_reasons,
             analytics=analytics,
-            cost_analytics=aggregate_costs,
+            cost_analytics=aggregate_cost_breakdown,
             yearly_breakdown=yearly,
             holdout_breakdown=holdout,
             warnings=warnings,
@@ -483,4 +556,11 @@ class BacktestService:
         return response
 
 
-__all__ = ["BacktestNotFoundError", "BacktestService", "BacktestValidationError", "profile_metadata"]
+__all__ = [
+    "BacktestNotFoundError",
+    "BacktestService",
+    "BacktestValidationError",
+    "PreparedBacktestResearch",
+    "aggregate_costs",
+    "profile_metadata",
+]

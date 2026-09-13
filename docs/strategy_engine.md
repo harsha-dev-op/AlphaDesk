@@ -111,7 +111,7 @@ Unknown strategy/universe/version errors return 404. Invalid clocks, types, boun
 
 ## Frontend
 
-`/strategies` is a read-only terminal workspace. It obtains strategy, version, universe, rule, and parameter metadata from the catalog; provides historical date/as-of and price-policy controls; validates obvious numeric bounds; and renders all members with matched state, passed/total rules, required values, condition detail, versions, warnings, and fingerprints. It includes loading, API-error, empty-universe, no-match, insufficient-history, and stale-demo-data states. Strategies are unlocked in navigation; Backtests remains locked.
+`/strategies` is a read-only terminal workspace. It obtains strategy, version, universe, rule, and parameter metadata from the catalog; provides historical date/as-of and price-policy controls; validates obvious numeric bounds; and renders all members with matched state, passed/total rules, required values, condition detail, versions, warnings, and fingerprints. It includes loading, API-error, empty-universe, no-match, insufficient-history, and stale-demo-data states. Backtest and Portfolio Research are separate unlocked consumers; this page still claims no outcome or allocation semantics.
 
 ## Tests and PostgreSQL performance
 
@@ -140,3 +140,5 @@ The fixture setup and cleanup remain in `app.benchmarks.postgres_scanner_scale`,
 Phase 4 continues to evaluate one EOD observation and return deterministic setup state. Phase 5 consumes these exact immutable definitions through a separate historical-series and backtest-profile layer; it does not move execution assumptions or outcome statistics into the Strategy Registry. Historical/selected feature rows and Phase 4 single-date results are regression-tested for condition equivalence.
 
 Phase 5 now supplies next-open fixed-notional execution, slippage, India delivery-cost assumptions, corporate-action continuity, trade analytics, OOS segmentation, and fingerprints. It still does not implement a capital-constrained portfolio, allocation, optimization, portfolio-valid risk statistics, brokers, paper trading, or live execution. See [backtesting engine specification](backtesting_engine.md).
+
+Phase 6 consumes the same immutable setup definitions through the shared Phase 5 historical preparation path, then applies a separate versioned portfolio policy. Strategy rules, defaults, feature dependencies, EOD timing, and result fingerprints remain unchanged; capital, allocation, cash, exposure, and risk statistics do not enter this registry. See [portfolio/risk engine specification](portfolio_risk_engine.md).
