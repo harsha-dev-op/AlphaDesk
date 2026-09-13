@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -234,3 +235,72 @@ class DataIngestionRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     records_written: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_summary: Mapped[str | None] = mapped_column(Text)
+
+
+class ResearchExperiment(Base):
+    """Immutable saved behavior configuration for a research composition."""
+
+    __tablename__ = "research_experiments"
+    __table_args__ = (
+        Index("ix_research_experiments_created_at_id", "created_at", "id"),
+        Index("ix_research_experiments_config_fingerprint", "config_fingerprint"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    policy_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    normalized_request: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    config_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ResearchExperimentRun(Base):
+    """Append-only execution provenance for an immutable experiment."""
+
+    __tablename__ = "research_experiment_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "replay_status IN ('INITIAL', 'REPRODUCED', 'DATASET_DRIFT_DETECTED', "
+            "'ENGINE_OR_RESULT_DRIFT_DETECTED')",
+            name="valid_replay_status",
+        ),
+        Index(
+            "ix_research_experiment_runs_experiment_executed_id",
+            "experiment_id",
+            "executed_at",
+            "id",
+        ),
+        Index("ix_research_experiment_runs_run_fingerprint", "run_fingerprint"),
+        Index("ix_research_experiment_runs_dataset_fingerprint", "dataset_fingerprint"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_experiments.id", ondelete="RESTRICT"), nullable=False
+    )
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    replay_status: Mapped[str] = mapped_column(String(48), nullable=False)
+    reference_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("research_experiment_runs.id", ondelete="RESTRICT")
+    )
+    normalized_request: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    composition_config_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_provenance: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    result_summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    member_outcomes: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    warnings: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+
+def _reject_immutable_write(_mapper: Mapper[object], _connection: object, _target: object) -> None:
+    raise ValueError("Saved research experiment provenance is immutable and append-only")
+
+
+for _immutable_model in (ResearchExperiment, ResearchExperimentRun):
+    event.listen(_immutable_model, "before_update", _reject_immutable_write)
+    event.listen(_immutable_model, "before_delete", _reject_immutable_write)

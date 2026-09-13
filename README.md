@@ -1,6 +1,6 @@
 # AlphaDesk
 
-AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 6 research foundation**: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic versioned strategy setups, an independent-trade backtester, and a finite-capital portfolio/risk simulator. It does not rank securities, generate recommendations, optimize strategies, connect to brokers, or place real or paper orders.
+AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 7 research foundation**: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic versioned strategy setups, an independent-trade backtester, a finite-capital portfolio/risk simulator, and order-invariant multi-strategy research composition with saved experiment provenance. It does not rank securities, generate recommendations, optimize strategies, connect to brokers, or place real or paper orders.
 
 ## What is included
 
@@ -21,13 +21,14 @@ AlphaDesk is an AI-assisted quantitative research platform for Indian markets. T
 - Next-session RAW-open trade simulation with fixed notional, integer entry shares, overlap controls, adverse slippage, optional stops/targets, bounded missing-price handling, and split/bonus continuity
 - A versioned India NSE cash-delivery cost model, trade analytics, yearly/OOS stability views, deterministic config/dataset/run fingerprints, and bounded trade previews
 - A separate immutable portfolio-policy registry, shared non-negative cash ledger, deterministic equal-slot allocation, entry constraints, daily RAW-close marks, and portfolio-valid risk analytics
+- A separate immutable composition-policy registry, shared feature computation, explicit N-of-M/missing-history semantics, deterministic composition fingerprints, and optional saved experiments with append-only replay runs
 - React 19, Vite/Vinext, Tailwind CSS, reusable UI primitives, and responsive financial-operations pages
 - Isolated backend tests; no paid APIs or external credentials
 
 The dependency direction is:
 
 ```text
-frontend → FastAPI routes → portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
+frontend → FastAPI routes → research/portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
                                   ↘ immutable registries, quality, calendar, adjustments
 ```
 
@@ -46,6 +47,8 @@ See [architecture notes](docs/architecture.md) for the point-in-time and adjustm
 | `trading_calendar` | Trading days, holidays, special/closed sessions, and session times |
 | `strategy_definitions` | Versioned metadata contract only; no strategy logic |
 | `data_ingestion_runs` | Dataset/provider/version audit and last-successful-ingestion status |
+| `research_experiments` | Immutable normalized multi-strategy research definitions |
+| `research_experiment_runs` | Append-only result provenance and replay/drift records |
 
 ## Local setup
 
@@ -127,6 +130,13 @@ Open `http://localhost:3000`. The frontend expects the API at `http://localhost:
 | POST | `/api/v1/backtests/run` | On-demand point-in-time historical setup replay and independent trade simulation |
 | GET | `/api/v1/portfolio/metadata` | Versioned policy, compatible inputs, portfolio bounds, allocation rules, and metric definitions |
 | POST | `/api/v1/portfolio/run` | On-demand shared-capital portfolio simulation, daily equity/risk analytics, and audit trails |
+| GET | `/api/v1/research/compositions/metadata` | Composition policies plus authoritative strategy/parameter metadata |
+| POST | `/api/v1/research/compositions/evaluate` | Ephemeral point-in-time N-of-M composition with no persistence |
+| POST | `/api/v1/research/experiments` | Save an immutable experiment definition and initial run |
+| GET | `/api/v1/research/experiments` | Bounded saved-experiment list with latest replay state |
+| GET | `/api/v1/research/experiments/{id}` | Immutable definition and latest run provenance |
+| GET | `/api/v1/research/experiments/{id}/runs` | Stable, bounded append-only run history |
+| POST | `/api/v1/research/experiments/{id}/runs` | Replay exact configuration and append drift status |
 
 Interactive API documentation is available at `http://localhost:8000/docs` while the backend is running.
 
@@ -136,7 +146,7 @@ The Phase 4 interface uses a persistent, collapsible research-terminal shell wit
 
 Shared theme variables in `frontend/app/globals.css` define the near-black surface hierarchy, borders, typography colors, restrained cyan selection accent, and semantic success/warning/danger/bullish/bearish states. Reusable shell, page-header, panel, metric, status, loading, empty, and error components live under `frontend/src/components`. Data pages retain compact rows, sticky table headers, horizontal overflow, tabular-number formatting, and visible keyboard focus.
 
-The eight implemented workspaces are Dashboard, Securities, Security Detail (Overview plus Technicals), Market Scanner, Strategy Research, Backtest Research, Portfolio Research, and Data Health. Portfolio Research renders metadata-driven capital constraints, portfolio/risk analytics, daily curves, auditable positions, rejected candidates, exposure/cash state, and the explicit cash ledger. All values come from AlphaDesk APIs; the UI does not fabricate live prices, signals, rankings, recommendations, or performance.
+The nine implemented workspaces are Dashboard, Securities, Security Detail (Overview plus Technicals), Market Scanner, Strategy Research, Backtest Research, Portfolio Research, Research Composition/Experiments, and Data Health. `/research` renders metadata-driven composition controls, deterministic member/component audits, exact-run saving, immutable definitions, append-only history, and replay drift states. All values come from AlphaDesk APIs; the UI does not fabricate live prices, signals, rankings, recommendations, or performance.
 
 See [the technical feature specification](docs/technical_features.md) for every formula, warm-up rule, unit, availability policy, and point-in-time convention.
 See [the corporate-action point-in-time contract](docs/corporate_action_point_in_time.md) for timestamp semantics, revision resolution, and legacy backfill policy.
@@ -146,6 +156,7 @@ See [the Phase 3.6 PostgreSQL scale validation](docs/postgres_scanner_scale_vali
 See [the Phase 4 strategy engine specification](docs/strategy_engine.md) for versioned definitions, rules, parameters, fingerprints, point-in-time behavior, APIs, UI, tests, and PostgreSQL strategy measurements.
 See [the Phase 5 backtesting engine specification](docs/backtesting_engine.md) for historical series computation, execution/cost contracts, corporate-action accounting, analytics, fingerprints, APIs, UI, tests, and PostgreSQL measurements.
 See [the Phase 6 portfolio/risk engine specification](docs/portfolio_risk_engine.md) for finite-capital allocation, cash accounting, daily event order, point-in-time safeguards, risk formulas, APIs, UI, tests, and PostgreSQL measurements.
+See [the Phase 7 research composition specification](docs/research_composition.md) for N-of-M semantics, shared technical computation, order invariance, fingerprints, saved experiments, replay drift, APIs, UI, tests, and PostgreSQL measurements.
 
 ## Verification
 
@@ -166,18 +177,18 @@ npm run lint
 npm run build
 ```
 
-Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted split/bonus continuity, point-in-time availability/revisions, catalogs, versions, batch/latest/historical equivalence, bounded query shape, scanner validation, Phase 4 strategies, Phase 5 independent trades, and Phase 6 allocation/cash/actions/marks/risk/OOS/fingerprint/API behavior.
+Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted split/bonus continuity, point-in-time availability/revisions, catalogs, versions, batch/latest/historical equivalence, bounded query shape, scanner validation, Phase 4 strategies, Phase 5 independent trades, Phase 6 allocation/cash/actions/marks/risk/OOS, and Phase 7 composition/experiment/replay/fingerprint/API behavior.
 
-## Phase 6 limitations
+## Phase 7 limitations
 
 - Demo records are fictional and stop in March 2025; their stale-calendar warning is intentional.
 - Only mechanically deterministic split and bonus adjustments are calculated. Other corporate actions are stored but require a validated policy in a later phase.
 - Features are calculated on demand and are not persisted. The representative PostgreSQL scanner met the 50/200/500 targets after projected price reads, so a version-keyed snapshot remains deliberately deferred.
-- Scanner expressions remain a flat AND list and strategy rules are immutable code definitions. There is no OR/grouping, ranking, saved experiment, authentication, streaming feed, intraday strategy generation, background worker, cache, parameter optimization, ML, broker, paper-trading loop, or live order model.
-- Phase 5 remains an independent fixed-notional simulator; Phase 6 is a separate long-only, unlevered, single-strategy shared-capital consumer with no rebalancing, shorting, multi-strategy composition, or optimization.
+- Scanner expressions remain a flat AND list and strategy rules are immutable code definitions. There is no OR/grouping, ranking, authentication, streaming feed, intraday strategy generation, background worker, cache, parameter optimization, ML, broker, paper-trading loop, or live order model.
+- Phase 5 remains an independent fixed-notional simulator and Phase 6 remains a separate long-only, unlevered, single-strategy shared-capital consumer. Phase 7 composition is research-only and is not connected to either execution path.
 - Daily OHLC requires a conservative same-bar stop/target policy. Unsupported corporate actions, market impact, contract-note aggregation, and broker-specific rules beyond explicit overrides remain limitations.
 - PostgreSQL is the production target; SQLite is used only by isolated tests and migration smoke checks.
 
-## Architecture decision after Phase 6
+## Architecture decision after Phase 7
 
-The capital-aware engine reuses the Phase 5 historical setup pipeline and execution/cost primitives, adding only a separate immutable policy, event loop, ledger, and analytics layer. Its guarded 300-session PostgreSQL results are recorded in the Phase 6 specification. No portfolio persistence, cache, snapshot, feature store, Redis service, or migration is justified. A future boundary may add versioned multi-strategy research composition and saved-experiment provenance without changing existing strategy, execution, cost, or portfolio-policy versions; it was not started automatically.
+The composition engine sits above Phase 4 and reuses one bounded technical-feature pass for every selected strategy. Only explicit experiment endpoints persist normalized definitions and compact append-only provenance; market history is not duplicated. Replay distinguishes reproduction from eligible dataset drift and engine/result drift. Phase 5 and Phase 6 remain behaviorally independent. No cache, feature store, optimizer, broker, background worker, or composition-to-trading integration is justified.

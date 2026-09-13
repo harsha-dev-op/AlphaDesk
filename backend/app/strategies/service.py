@@ -133,6 +133,30 @@ def strategy_fingerprint(
     )
 
 
+def strategy_result_fingerprint(
+    *,
+    definition_fingerprint: str,
+    observation_date: object,
+    as_of: datetime,
+    security_id: object,
+    input_fingerprint: str,
+    feature_state: dict[str, Decimal | bool | None],
+    matched: bool,
+) -> str:
+    """Build the stable Phase 4 security-result identity for shared consumers."""
+    return _fingerprint(
+        {
+            "strategy_fingerprint": definition_fingerprint,
+            "observation_date": str(observation_date),
+            "as_of": as_of,
+            "security_id": str(security_id),
+            "input_fingerprint": input_fingerprint,
+            "feature_state": feature_state,
+            "matched": matched,
+        }
+    )
+
+
 def strategy_metadata(definition: StrategyDefinition) -> StrategyMetadata:
     defaults = {parameter.code: parameter.default_value for parameter in definition.parameters}
     parameters_by_code = {parameter.code: parameter for parameter in definition.parameters}
@@ -201,6 +225,31 @@ def _condition_passes(
     if operator == "<=":
         return actual <= expected
     raise StrategyValidationError(f"Unsupported strategy operator: {operator}")
+
+
+def evaluate_strategy_conditions(
+    definition: StrategyDefinition,
+    parameters: dict[str, ParameterValue],
+    values: dict[str, Decimal | bool | None],
+    feature_versions: dict[str, str],
+) -> list[StrategyConditionResult]:
+    """Evaluate one immutable strategy against an already-computed feature row."""
+    return [
+        StrategyConditionResult(
+            feature_code=rule.feature_code,
+            feature_version=feature_versions[rule.feature_code],
+            operator=rule.operator,
+            expected_value=parameters[rule.parameter_code],
+            actual_value=values[rule.feature_code],
+            passed=_condition_passes(
+                values[rule.feature_code],
+                rule.operator,
+                parameters[rule.parameter_code],
+            ),
+            unit=FEATURE_DEFINITIONS[rule.feature_code].unit,
+        )
+        for rule in definition.rules
+    ]
 
 
 def _display_value(value: Decimal | bool | None) -> str:
@@ -301,22 +350,12 @@ class StrategyService:
                     "INSUFFICIENT_FEATURE_HISTORY: required feature values unavailable: "
                     + ", ".join(missing)
                 )
-            conditions = [
-                StrategyConditionResult(
-                    feature_code=rule.feature_code,
-                    feature_version=response.feature_versions[rule.feature_code],
-                    operator=rule.operator,
-                    expected_value=parameters[rule.parameter_code],
-                    actual_value=values[rule.feature_code],
-                    passed=_condition_passes(
-                        values[rule.feature_code],
-                        rule.operator,
-                        parameters[rule.parameter_code],
-                    ),
-                    unit=FEATURE_DEFINITIONS[rule.feature_code].unit,
-                )
-                for rule in definition.rules
-            ]
+            conditions = evaluate_strategy_conditions(
+                definition,
+                parameters,
+                values,
+                response.feature_versions,
+            )
             evaluated.append((security, response, conditions, warnings, observation))
         condition_evaluation_ms = (time.perf_counter() - phase) * 1_000
 
@@ -343,16 +382,14 @@ class StrategyService:
                     )
                 )
             )
-            result_fingerprint = _fingerprint(
-                {
-                    "strategy_fingerprint": definition_fingerprint,
-                    "observation_date": request.observation_date.isoformat(),
-                    "as_of": request.as_of,
-                    "security_id": str(security.id),
-                    "input_fingerprint": response.dataset.fingerprint,
-                    "feature_state": required_values,
-                    "matched": matched,
-                }
+            result_fingerprint = strategy_result_fingerprint(
+                definition_fingerprint=definition_fingerprint,
+                observation_date=request.observation_date,
+                as_of=request.as_of,
+                security_id=security.id,
+                input_fingerprint=response.dataset.fingerprint,
+                feature_state=required_values,
+                matched=matched,
             )
             results.append(
                 StrategySecurityResult(

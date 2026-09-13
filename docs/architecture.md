@@ -1,9 +1,9 @@
-# AlphaDesk Phase 6 architecture
+# AlphaDesk Phase 7 architecture
 
 ## Request flow
 
 ```text
-React/Vite UI → typed API client → FastAPI routes → portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
+React/Vite UI → typed API client → FastAPI routes → research/portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
                                       ↘ immutable registries / quality / calendar / adjustments
 ```
 
@@ -107,7 +107,7 @@ Backtest profiles and cost models are separate frozen registries, so execution a
 
 ## Boundary for later phases
 
-No order, recommendation, broker, ranking, optimization, ML, or alert execution exists. Scanner, strategy, backtest, and portfolio APIs are read-only research calculations. `strategy_definitions` remains metadata only. Multi-strategy capital composition and saved experiment provenance remain possible later boundaries; neither is part of Phase 6.
+No order, recommendation, broker, ranking, optimization, ML, or alert execution exists. Scanner, strategy, backtest, portfolio, and composition APIs remain research calculations. `strategy_definitions` remains metadata only. Saved experiments preserve research provenance but do not connect composition to execution or allocation.
 ## Phase 6 portfolio and risk boundary
 
 Phase 6 adds an on-demand `PortfolioService` above the unchanged Phase 4 strategy and Phase 5 historical execution layers. `BacktestService.prepare_research` is the single reusable path for historical membership, calendar, feature-series, setup, and dataset construction; the Phase 5 backtest service and Phase 6 portfolio service both consume it. Portfolio allocation does not enter the Strategy Registry, and the Phase 5 independent-trade API keeps its original semantics and deterministic fingerprints.
@@ -115,3 +115,9 @@ Phase 6 adds an on-demand `PortfolioService` above the unchanged Phase 4 strateg
 The frozen `LONG_ONLY_EQUAL_SLOT_PORTFOLIO` v1 definition owns finite-capital rules. `PortfolioSimulator` processes an explicit daily order—pre-open actions, open exits, session-start state, symbol-ordered candidates, entries, intraday exits, close marks—against one non-negative Decimal cash balance. Cash movements form an append-only typed ledger. Daily RAW-close marks plus mark-to-last warnings feed a separate analytics module for return, CAGR, sample volatility, effective-daily-risk-free Sharpe/Sortino, drawdown/Calmar, turnover, exposure, and position statistics.
 
 The module is read-only with respect to PostgreSQL. It adds no schema, stored run, cache, snapshot, feature store, or queue. See [the Phase 6 portfolio/risk specification](portfolio_risk_engine.md).
+
+## Phase 7 research composition boundary
+
+Phase 7 adds a separate immutable `CONSENSUS_N_OF_M` v1 registry above the unchanged Phase 4 strategies. `ResearchService` canonicalizes strategy/version/parameter components, resolves their 13-feature union, and calls the authoritative Phase 4 batch technical path once for the entire historical universe. Each strategy consumes the same exact-date, availability-gated feature row; composition then preserves matched, not-matched, and potentially-outcome-changing insufficient-history states for every member.
+
+Ephemeral evaluation remains read-only. Explicit save/replay endpoints write only immutable normalized experiment definitions and compact append-only run provenance to `research_experiments` and `research_experiment_runs`. Config, eligible dataset, and run fingerprints support order-invariant reproduction and distinguish eligible historical-data drift from engine/result drift. No market history, strategy rules, or executable expressions are persisted in experiment JSON. See [the Phase 7 research composition specification](research_composition.md).

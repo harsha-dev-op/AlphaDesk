@@ -1,4 +1,4 @@
-import type { BacktestMetadata, BacktestRunRequest, BacktestRunResponse, FeatureCatalog, FeatureSetCatalog, HealthResponse, MarketScanRequest, MarketScanResponse, PortfolioMetadata, PortfolioRunRequest, PortfolioRunResponse, PriceSeries, QualityResponse, ScannerMetadata, SecuritiesPage, Security, SecurityFeatureSeries, StrategyCatalog, StrategyEvaluationRequest, StrategyEvaluationResponse } from '@/src/types/api';
+import type { BacktestMetadata, BacktestRunRequest, BacktestRunResponse, CompositionEvaluationRequest, CompositionEvaluationResponse, CompositionMetadata, ExperimentCreateRequest, ExperimentCreateResponse, ExperimentDefinition, ExperimentListResponse, ExperimentReplayResponse, ExperimentRunListResponse, FeatureCatalog, FeatureSetCatalog, HealthResponse, MarketScanRequest, MarketScanResponse, PortfolioMetadata, PortfolioRunRequest, PortfolioRunResponse, PriceSeries, QualityResponse, ScannerMetadata, SecuritiesPage, Security, SecurityFeatureSeries, StrategyCatalog, StrategyEvaluationRequest, StrategyEvaluationResponse } from '@/src/types/api';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -46,4 +46,11 @@ export const api = {
   runBacktest: (payload: BacktestRunRequest, signal?: AbortSignal) => request<BacktestRunResponse>('/api/v1/backtests/run', signal, { method: 'POST', body: JSON.stringify(payload) }),
   portfolioMetadata: (signal?: AbortSignal) => request<PortfolioMetadata>('/api/v1/portfolio/metadata', signal),
   runPortfolio: (payload: PortfolioRunRequest, signal?: AbortSignal) => request<PortfolioRunResponse>('/api/v1/portfolio/run', signal, { method: 'POST', body: JSON.stringify(payload) }),
+  researchMetadata: (signal?: AbortSignal) => request<CompositionMetadata>('/api/v1/research/compositions/metadata', signal),
+  evaluateComposition: (payload: CompositionEvaluationRequest, signal?: AbortSignal) => request<CompositionEvaluationResponse>('/api/v1/research/compositions/evaluate', signal, { method: 'POST', body: JSON.stringify(payload) }),
+  createExperiment: (payload: ExperimentCreateRequest, signal?: AbortSignal) => request<ExperimentCreateResponse>('/api/v1/research/experiments', signal, { method: 'POST', body: JSON.stringify(payload) }),
+  experiments: (page = 1, pageSize = 25, signal?: AbortSignal) => request<ExperimentListResponse>(`/api/v1/research/experiments?page=${page}&page_size=${pageSize}`, signal),
+  experiment: (id: string, signal?: AbortSignal) => request<ExperimentDefinition>(`/api/v1/research/experiments/${encodeURIComponent(id)}`, signal),
+  experimentRuns: (id: string, page = 1, pageSize = 25, signal?: AbortSignal) => request<ExperimentRunListResponse>(`/api/v1/research/experiments/${encodeURIComponent(id)}/runs?page=${page}&page_size=${pageSize}`, signal),
+  replayExperiment: (id: string, signal?: AbortSignal) => request<ExperimentReplayResponse>(`/api/v1/research/experiments/${encodeURIComponent(id)}/runs`, signal, { method: 'POST' }),
 };

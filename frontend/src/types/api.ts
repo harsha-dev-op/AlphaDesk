@@ -357,6 +357,214 @@ export interface StrategyEvaluationResponse {
   results: StrategySecurityResult[];
 }
 
+export type CompositionStatus = 'MATCHED' | 'NOT_MATCHED' | 'INSUFFICIENT_FEATURE_HISTORY';
+export type ReplayStatus = 'INITIAL' | 'REPRODUCED' | 'DATASET_DRIFT_DETECTED' | 'ENGINE_OR_RESULT_DRIFT_DETECTED';
+
+export interface CompositionComponentRequest {
+  strategy_code: string;
+  strategy_version: string;
+  parameter_overrides: Record<string, StrategyScalar>;
+}
+
+export interface CompositionEvaluationRequest {
+  policy_code: string;
+  policy_version: string;
+  universe: string;
+  observation_date: string;
+  as_of: string;
+  adjustment_policy: 'RAW' | 'ADJUSTED';
+  required_match_count: number;
+  components: CompositionComponentRequest[];
+}
+
+export interface CompositionPolicyMetadata {
+  policy_code: string;
+  policy_version: string;
+  display_name: string;
+  description: string;
+  minimum_components: number;
+  maximum_components: number;
+  aggregation_rule: 'AT_LEAST_N_MATCHED';
+  insufficient_history_rule: 'COULD_CHANGE_THRESHOLD';
+  component_order_policy: 'CANONICAL_STRATEGY_PARAMETERS';
+  policy_fingerprint: string;
+}
+
+export interface CompositionMetadata {
+  policies: CompositionPolicyMetadata[];
+  strategies: StrategyMetadata[];
+  universes: ScannerUniverse[];
+  adjustment_policies: ('RAW' | 'ADJUSTED')[];
+  latest_observation_date: string | null;
+  research_disclaimer: string;
+}
+
+export interface CompositionComponentConfiguration {
+  strategy: StrategyMetadata;
+  effective_parameters: Record<string, StrategyScalar>;
+  strategy_fingerprint: string;
+}
+
+export interface CompositionComponentResult {
+  strategy_code: string;
+  strategy_version: string;
+  status: CompositionStatus;
+  effective_parameters: Record<string, StrategyScalar>;
+  required_feature_values: Record<string, FeatureValue>;
+  conditions: StrategyConditionResult[];
+  passed_condition_count: number;
+  total_condition_count: number;
+  strategy_fingerprint: string;
+  result_fingerprint: string;
+  warnings: string[];
+}
+
+export interface CompositionSecurityResult {
+  security_id: string;
+  symbol: string;
+  company_name: string;
+  exchange: string;
+  observation_date: string;
+  as_of: string;
+  available_at: string | null;
+  status: CompositionStatus;
+  matched_strategy_count: number;
+  insufficient_strategy_count: number;
+  required_match_count: number;
+  adjustment_policy: 'RAW' | 'ADJUSTED';
+  input_fingerprint: string;
+  composition_result_fingerprint: string;
+  component_results: CompositionComponentResult[];
+  warnings: string[];
+}
+
+export interface CompositionEvaluationResponse {
+  normalized_request: CompositionEvaluationRequest;
+  policy: CompositionPolicyMetadata;
+  components: CompositionComponentConfiguration[];
+  universe: ScannerUniverse;
+  observation_date: string;
+  as_of: string;
+  executed_at: string;
+  adjustment_policy: 'RAW' | 'ADJUSTED';
+  union_feature_codes: string[];
+  universe_member_count: number;
+  evaluated_security_count: number;
+  matched_count: number;
+  not_matched_count: number;
+  insufficient_history_count: number;
+  result_order: 'SYMBOL_ASC';
+  component_order: 'STRATEGY_CODE_VERSION_PARAMETERS_ASC';
+  composition_config_fingerprint: string;
+  composition_dataset_fingerprint: string;
+  composition_run_fingerprint: string;
+  engine_provenance: Record<string, unknown>;
+  warnings: string[];
+  timings: {
+    universe_resolution_ms: number;
+    feature_computation_ms: number;
+    component_evaluation_ms: number;
+    composition_ms: number;
+    response_build_ms: number;
+    total_service_ms: number;
+  };
+  results: CompositionSecurityResult[];
+}
+
+export interface ExperimentRunSummary {
+  total_members: number;
+  matched: number;
+  not_matched: number;
+  insufficient_history: number;
+}
+
+export interface ExperimentMemberOutcome {
+  symbol: string;
+  status: CompositionStatus;
+  matched_strategy_count: number;
+  insufficient_strategy_count: number;
+  required_match_count: number;
+  composition_result_fingerprint: string;
+  components: Array<Record<string, string>>;
+}
+
+export interface ExperimentRun {
+  id: string;
+  experiment_id: string;
+  executed_at: string;
+  replay_status: ReplayStatus;
+  reference_run_id: string | null;
+  normalized_request: CompositionEvaluationRequest;
+  composition_config_fingerprint: string;
+  dataset_fingerprint: string;
+  run_fingerprint: string;
+  engine_provenance: Record<string, unknown>;
+  summary: ExperimentRunSummary;
+  member_outcomes: ExperimentMemberOutcome[];
+  warnings: string[];
+}
+
+export interface ExperimentDefinition {
+  id: string;
+  name: string;
+  description: string | null;
+  policy_code: string;
+  policy_version: string;
+  normalized_request: CompositionEvaluationRequest;
+  config_fingerprint: string;
+  created_at: string;
+  latest_run: ExperimentRun | null;
+}
+
+export interface ExperimentListItem {
+  id: string;
+  name: string;
+  description: string | null;
+  policy_code: string;
+  policy_version: string;
+  strategy_count: number;
+  required_match_count: number;
+  universe: string;
+  observation_date: string;
+  adjustment_policy: 'RAW' | 'ADJUSTED';
+  config_fingerprint: string;
+  created_at: string;
+  latest_replay_status: ReplayStatus | null;
+  latest_run_at: string | null;
+  latest_run_fingerprint: string | null;
+}
+
+export interface ExperimentListResponse {
+  items: ExperimentListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ExperimentRunListResponse {
+  items: ExperimentRun[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ExperimentCreateRequest {
+  name: string;
+  description: string | null;
+  composition: CompositionEvaluationRequest;
+}
+
+export interface ExperimentCreateResponse {
+  experiment: ExperimentDefinition;
+  initial_evaluation: CompositionEvaluationResponse;
+}
+
+export interface ExperimentReplayResponse {
+  experiment: ExperimentDefinition;
+  run: ExperimentRun;
+  evaluation: CompositionEvaluationResponse;
+}
+
 export interface BacktestProfileMetadata {
   profile_code: string;
   profile_version: string;

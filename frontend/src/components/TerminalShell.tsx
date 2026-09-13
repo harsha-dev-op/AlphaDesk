@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { Activity, BarChart3, Bot, BriefcaseBusiness, ChartCandlestick, Database, FileSearch, FlaskConical, LayoutDashboard, LockKeyhole, Newspaper, Search, Settings, ShieldCheck } from 'lucide-react';
+import { Activity, BarChart3, Bot, BriefcaseBusiness, ChartCandlestick, Database, FileSearch, FlaskConical, Layers3, LayoutDashboard, LockKeyhole, Newspaper, Search, Settings, ShieldCheck } from 'lucide-react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarSeparator, SidebarTrigger } from '@/components/ui/sidebar';
 import { GlobalSecuritySearch } from '@/src/components/GlobalSecuritySearch';
@@ -14,7 +14,7 @@ import { api } from '@/src/services/api';
 const groups = [
   { label: 'Workspace', items: [{ href: '/', label: 'Dashboard', icon: LayoutDashboard }] },
   { label: 'Market', items: [{ href: '', label: 'Markets', icon: ChartCandlestick, future: true }, { href: '/scanner', label: 'Scanner', icon: Search }, { href: '/securities', label: 'Securities', icon: BarChart3 }, { href: '', label: 'News & events', icon: Newspaper, future: true }] },
-  { label: 'Research', items: [{ href: '/strategies', label: 'Strategies', icon: FlaskConical }, { href: '/backtests', label: 'Backtests', icon: FileSearch }, { href: '/portfolio', label: 'Portfolio', icon: BriefcaseBusiness }] },
+  { label: 'Research', items: [{ href: '/research', label: 'Research', icon: Layers3 }, { href: '/strategies', label: 'Strategies', icon: FlaskConical }, { href: '/backtests', label: 'Backtests', icon: FileSearch }, { href: '/portfolio', label: 'Portfolio', icon: BriefcaseBusiness }] },
   { label: 'Intelligence', items: [{ href: '', label: 'AI copilot', icon: Bot, future: true }] },
   { label: 'System', items: [{ href: '/data-health', label: 'Data health', icon: ShieldCheck }, { href: '', label: 'Settings', icon: Settings, future: true }] },
 ];
@@ -35,7 +35,7 @@ export function TerminalShell({ title, eyebrow, children }: { title: string; eye
           {item.future ? <SidebarMenuButton disabled tooltip={`${item.label} · future phase`} className="text-sidebar-foreground/34"><item.icon /><span>{item.label}</span><LockKeyhole className="ml-auto size-3! opacity-55" /></SidebarMenuButton> : <SidebarMenuButton render={<Link href={item.href} />} isActive={item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)} tooltip={item.label} className="relative data-active:bg-primary/[0.10] data-active:text-primary data-active:before:absolute data-active:before:inset-y-1.5 data-active:before:left-0 data-active:before:w-0.5 data-active:before:bg-primary"><item.icon /><span>{item.label}</span></SidebarMenuButton>}
         </SidebarMenuItem>)}</SidebarMenu></SidebarGroupContent></SidebarGroup></div>)}
       </SidebarContent>
-      <SidebarFooter className="border-t border-sidebar-border/90 p-2"><SidebarMenu><SidebarMenuItem><SidebarMenuButton tooltip="Local Phase 6 research workspace · no broker connection" className="h-10 text-sidebar-foreground/60"><span className="grid size-7 shrink-0 place-items-center border border-sidebar-border bg-sidebar-accent/45"><Database className="size-3.5" /></span><span className="min-w-0"><span className="block truncate text-xs font-medium text-sidebar-foreground/80">Local workspace</span><span className="block truncate text-[0.625rem]">No broker connection</span></span><SidebarMenuBadge className="text-[0.55rem] text-primary">P6</SidebarMenuBadge></SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border/90 p-2"><SidebarMenu><SidebarMenuItem><SidebarMenuButton tooltip="Local Phase 7 research workspace · no broker connection" className="h-10 text-sidebar-foreground/60"><span className="grid size-7 shrink-0 place-items-center border border-sidebar-border bg-sidebar-accent/45"><Database className="size-3.5" /></span><span className="min-w-0"><span className="block truncate text-xs font-medium text-sidebar-foreground/80">Local workspace</span><span className="block truncate text-[0.625rem]">No broker connection</span></span><SidebarMenuBadge className="text-[0.55rem] text-primary">P7</SidebarMenuBadge></SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
       <SidebarRail />
     </Sidebar>
     <SidebarInset className="min-w-0 bg-background workspace-backdrop">
