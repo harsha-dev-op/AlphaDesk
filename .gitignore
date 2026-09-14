@@ -15,6 +15,14 @@ htmlcov/
 backend/.venv/
 *.db
 
+# Project-local official market-data artifacts (never commit or redistribute)
+/data/nse/inbox/*
+/data/nse/raw/*
+/data/nse/rejected/*
+!/data/nse/inbox/.gitkeep
+!/data/nse/raw/.gitkeep
+!/data/nse/rejected/.gitkeep
+
 # JavaScript and build output
 node_modules/
 frontend/.next/

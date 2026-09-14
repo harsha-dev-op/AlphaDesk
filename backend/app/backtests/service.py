@@ -261,6 +261,10 @@ class BacktestService:
         market_index = self.indices.get_by_name_or_symbol(request.universe)
         if market_index is None:
             raise BacktestNotFoundError("Universe not found")
+        try:
+            self.indices.assert_historical_coverage(market_index, request.start_date)
+        except ValueError as exc:
+            raise BacktestValidationError(str(exc)) from exc
         memberships = self.indices.memberships_between(market_index.id, request.start_date, request.end_date)
         securities = sorted(
             {membership.security.id: membership.security for membership in memberships}.values(),

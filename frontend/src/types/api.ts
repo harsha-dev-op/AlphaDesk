@@ -65,6 +65,85 @@ export interface QualityResponse {
   checks: QualityCheck[];
 }
 
+export type DatasetMode = 'DEMO' | 'OFFICIAL_NSE' | 'MIXED' | 'UNKNOWN';
+
+export interface DataSourceDefinition {
+  artifact_type: string;
+  provider: string;
+  owner: string;
+  landing_page: string;
+  artifact_kind: string;
+  parser_code: string;
+  parser_version: string;
+  automation_suitability: string;
+  point_in_time_limit: string;
+  latest_artifact_status: string | null;
+  latest_source_date: string | null;
+  latest_imported_at: string | null;
+}
+
+export interface DataSourcesResponse {
+  mode: DatasetMode;
+  sources: DataSourceDefinition[];
+  redistribution_notice: string;
+}
+
+export interface SourceArtifactSummary {
+  id: string;
+  provider: string;
+  artifact_type: string;
+  source_date: string;
+  imported_at: string;
+  sha256: string;
+  parser_code: string;
+  parser_version: string;
+  parse_status: string;
+  row_count: number;
+  accepted_row_count: number;
+  rejected_row_count: number;
+  warning_count: number;
+}
+
+export interface IngestionIssueSummary {
+  severity: 'ERROR' | 'WARNING' | 'INFO';
+  code: string;
+  message: string;
+  row_key: string | null;
+  created_at: string;
+}
+
+export interface IndexCoverage {
+  symbol: string;
+  label: string;
+  current_snapshot_present: boolean;
+  snapshot_as_of: string | null;
+  member_count: number;
+  coverage_start: string | null;
+  coverage_end: string | null;
+  coverage_kind: 'NONE' | 'CURRENT_SNAPSHOT_ONLY' | 'BOUNDED_SNAPSHOT_SEQUENCE';
+  warning: string | null;
+}
+
+export interface DataCoverageResponse {
+  mode: DatasetMode;
+  provider: string | null;
+  last_successful_ingestion: string | null;
+  earliest_official_price_session: string | null;
+  latest_official_price_session: string | null;
+  official_security_count: number;
+  official_daily_price_count: number;
+  demo_security_count: number;
+  demo_daily_price_count: number;
+  source_artifact_count: number;
+  corporate_actions_promoted: number;
+  corporate_actions_quarantined: number;
+  missing_official_sessions: number;
+  index_coverage: IndexCoverage[];
+  latest_artifacts: SourceArtifactSummary[];
+  latest_issues: IngestionIssueSummary[];
+  warnings: string[];
+}
+
 export interface FeatureDefinition {
   code: string;
   version: string;

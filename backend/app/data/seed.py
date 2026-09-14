@@ -51,7 +51,7 @@ def seed_demo(session: Session) -> dict[str, int]:
     while day <= date(2025, 3, 31):
         is_weekday = day.weekday() < 5
         is_holiday = day == date(2025, 2, 26)
-        session.add(TradingCalendar(exchange="NSE", trading_date=day, is_trading_day=is_weekday and not is_holiday, session_open=time(9, 15) if is_weekday and not is_holiday else None, session_close=time(15, 30) if is_weekday and not is_holiday else None, session_type="REGULAR" if is_weekday and not is_holiday else "CLOSED", notes="Demo exchange holiday fixture" if is_holiday else ("Weekend" if not is_weekday else None)))
+        session.add(TradingCalendar(exchange="NSE", trading_date=day, is_trading_day=is_weekday and not is_holiday, session_open=time(9, 15) if is_weekday and not is_holiday else None, session_close=time(15, 30) if is_weekday and not is_holiday else None, session_type="REGULAR" if is_weekday and not is_holiday else "CLOSED", notes="Demo exchange holiday fixture" if is_holiday else ("Weekend" if not is_weekday else None), data_origin="DEMO"))
         day += timedelta(days=1)
 
     session.add(StrategyDefinition(strategy_code="PHASE2_PLACEHOLDER", name="Reserved Phase 2 Strategy Contract", version="0.0.0", description="Schema placeholder only; contains no trading logic.", is_active=False))

@@ -1,6 +1,6 @@
 # AlphaDesk
 
-AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 7 research foundation**: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic versioned strategy setups, an independent-trade backtester, a finite-capital portfolio/risk simulator, and order-invariant multi-strategy research composition with saved experiment provenance. It does not rank securities, generate recommendations, optimize strategies, connect to brokers, or place real or paper orders.
+AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 8 official/public NSE EOD data foundation** above the Phase 7 research stack: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic versioned strategy setups, an independent-trade backtester, a finite-capital portfolio/risk simulator, and order-invariant multi-strategy research composition with saved experiment provenance. It does not rank securities, generate recommendations, optimize strategies, connect to brokers, or place real or paper orders.
 
 ## What is included
 
@@ -24,6 +24,8 @@ AlphaDesk is an AI-assisted quantitative research platform for Indian markets. T
 - A separate immutable composition-policy registry, shared feature computation, explicit N-of-M/missing-history semantics, deterministic composition fingerprints, and optional saved experiments with append-only replay runs
 - React 19, Vite/Vinext, Tailwind CSS, reusable UI primitives, and responsive financial-operations pages
 - Isolated backend tests; no paid APIs or external credentials
+- Safe official/public NSE MII security-master and CM UDiFF raw EOD ingestion with local-file fallback
+- Immutable checksum-addressed source provenance, explicit DEMO/OFFICIAL/MIXED visibility, current-only Nifty 200/500 snapshots, and bounded incremental/backfill CLI tooling
 
 The dependency direction is:
 
@@ -47,6 +49,8 @@ See [architecture notes](docs/architecture.md) for the point-in-time and adjustm
 | `trading_calendar` | Trading days, holidays, special/closed sessions, and session times |
 | `strategy_definitions` | Versioned metadata contract only; no strategy logic |
 | `data_ingestion_runs` | Dataset/provider/version audit and last-successful-ingestion status |
+| `source_artifacts` | Immutable official/public file identity, checksum, parser, status, counts, and local storage key |
+| `ingestion_issues` | Bounded structured parser, rejection, warning, and conflict evidence |
 | `research_experiments` | Immutable normalized multi-strategy research definitions |
 | `research_experiment_runs` | Append-only result provenance and replay/drift records |
 
@@ -119,6 +123,8 @@ Open `http://localhost:3000`. The frontend expects the API at `http://localhost:
 | GET | `/api/v1/indices` | Available indices |
 | GET | `/api/v1/indices/{index}/members` | Optional historical `as_of` date |
 | GET | `/api/v1/data-quality/status` | Aggregate plus named validation checks |
+| GET | `/api/v1/data-sources` | Audited official/public source contracts and latest artifact status |
+| GET | `/api/v1/data-coverage` | DEMO/OFFICIAL/MIXED counts, dates, artifact summaries, and universe/PIT warnings |
 | GET | `/api/v1/features/catalog` | Immutable formula, field, window, output, and availability definitions |
 | GET | `/api/v1/feature-sets` | Available feature-set codes and versions |
 | GET | `/api/v1/securities/{symbol}/features` | `start_date`, `end_date`, set/version, `adjustment_policy`, and timezone-aware `as_of` |
@@ -157,6 +163,7 @@ See [the Phase 4 strategy engine specification](docs/strategy_engine.md) for ver
 See [the Phase 5 backtesting engine specification](docs/backtesting_engine.md) for historical series computation, execution/cost contracts, corporate-action accounting, analytics, fingerprints, APIs, UI, tests, and PostgreSQL measurements.
 See [the Phase 6 portfolio/risk engine specification](docs/portfolio_risk_engine.md) for finite-capital allocation, cash accounting, daily event order, point-in-time safeguards, risk formulas, APIs, UI, tests, and PostgreSQL measurements.
 See [the Phase 7 research composition specification](docs/research_composition.md) for N-of-M semantics, shared technical computation, order invariance, fingerprints, saved experiments, replay drift, APIs, UI, tests, and PostgreSQL measurements.
+See [the official/public NSE source audit](docs/nse_data_sources.md) and [the ingestion runbook](docs/data_ingestion.md) for source contracts, responsible access, local fallback, CLI commands, validation, provenance, and bounded backfill operations.
 
 ## Verification
 
@@ -179,7 +186,7 @@ npm run build
 
 Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted split/bonus continuity, point-in-time availability/revisions, catalogs, versions, batch/latest/historical equivalence, bounded query shape, scanner validation, Phase 4 strategies, Phase 5 independent trades, Phase 6 allocation/cash/actions/marks/risk/OOS, and Phase 7 composition/experiment/replay/fingerprint/API behavior.
 
-## Phase 7 limitations
+## Phase 8 limitations
 
 - Demo records are fictional and stop in March 2025; their stale-calendar warning is intentional.
 - Only mechanically deterministic split and bonus adjustments are calculated. Other corporate actions are stored but require a validated policy in a later phase.
@@ -188,7 +195,11 @@ Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted 
 - Phase 5 remains an independent fixed-notional simulator and Phase 6 remains a separate long-only, unlevered, single-strategy shared-capital consumer. Phase 7 composition is research-only and is not connected to either execution path.
 - Daily OHLC requires a conservative same-bar stop/target policy. Unsupported corporate actions, market impact, contract-note aggregation, and broker-specific rules beyond explicit overrides remain limitations.
 - PostgreSQL is the production target; SQLite is used only by isolated tests and migration smoke checks.
+- Free/public Nifty constituent files are current snapshots, not historical membership archives. Real index research before the first imported snapshot is refused explicitly.
+- Automated official downloads may be denied or time out; AlphaDesk stops without bypass and supports operator-downloaded files in the project-local inbox.
+- Public corporate-action CSV rows without trustworthy publication timestamps remain quarantined and cannot influence point-in-time adjustments.
+- Phase 8 is EOD-only and operator initiated; there is no scheduler, bulk redistribution endpoint, streaming quote path, or multi-year autonomous download.
 
-## Architecture decision after Phase 7
+## Architecture decision after Phase 8
 
-The composition engine sits above Phase 4 and reuses one bounded technical-feature pass for every selected strategy. Only explicit experiment endpoints persist normalized definitions and compact append-only provenance; market history is not duplicated. Replay distinguishes reproduction from eligible dataset drift and engine/result drift. Phase 5 and Phase 6 remain behaviorally independent. No cache, feature store, optimizer, broker, background worker, or composition-to-trading integration is justified.
+Official data is normalized into the same security, raw-price, action, membership, and calendar tables consumed by Phases 1–7. Source artifacts and issues add lineage without duplicating the feature or research engines. Current constituent snapshots are never backcast, unknown action publication times are never fabricated, and historical price conflicts never overwrite persisted rows. No cache, feature store, optimizer, broker, background worker, or composition-to-trading integration is justified.

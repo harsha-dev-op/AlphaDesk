@@ -22,6 +22,18 @@ class IndexRepository:
             )
         )
 
+    def coverage_start(self, index_id) -> date | None:
+        return self.session.scalar(
+            select(func.min(IndexMembership.valid_from)).where(IndexMembership.index_id == index_id)
+        )
+
+    def assert_historical_coverage(self, index: MarketIndex, requested_start: date) -> None:
+        if index.provider != "OFFICIAL_NSE_INDICES_PUBLIC":
+            return
+        coverage_start = self.coverage_start(index.id)
+        if coverage_start is None or requested_start < coverage_start:
+            raise ValueError("HISTORICAL_MEMBERSHIP_COVERAGE_INCOMPLETE")
+
     def members_as_of(self, index_id, as_of: date) -> list[IndexMembership]:
         statement = (
             select(IndexMembership)

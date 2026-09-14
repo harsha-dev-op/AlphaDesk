@@ -44,6 +44,7 @@ class Security(TimestampMixin, Base):
     exchange: Mapped[str] = mapped_column(String(16), nullable=False)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     trading_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    series: Mapped[str | None] = mapped_column(String(8))
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     isin: Mapped[str | None] = mapped_column(String(12), unique=True)
     security_type: Mapped[str] = mapped_column(String(32), default="EQUITY", nullable=False)
@@ -53,6 +54,13 @@ class Security(TimestampMixin, Base):
     listing_date: Mapped[date | None] = mapped_column(Date)
     delisting_date: Mapped[date | None] = mapped_column(Date)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    data_origin: Mapped[str] = mapped_column(String(32), default="UNKNOWN", nullable=False)
+    source_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT")
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
 
     prices: Mapped[list[DailyPrice]] = relationship(back_populates="security", cascade="all, delete-orphan")
     corporate_actions: Mapped[list[CorporateAction]] = relationship(back_populates="security", cascade="all, delete-orphan")
@@ -82,6 +90,13 @@ class DailyPrice(Base):
     traded_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    data_origin: Mapped[str] = mapped_column(String(32), default="UNKNOWN", nullable=False)
+    source_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT")
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
 
     security: Mapped[Security] = relationship(back_populates="prices")
 
@@ -113,6 +128,13 @@ class CorporateAction(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     supersedes_action_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("corporate_actions.id", ondelete="RESTRICT")
+    )
+    data_origin: Mapped[str] = mapped_column(String(32), default="UNKNOWN", nullable=False)
+    source_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT")
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
     )
 
     security: Mapped[Security] = relationship(back_populates="corporate_actions")
@@ -159,6 +181,13 @@ class IndexMembership(Base):
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
     valid_to: Mapped[date | None] = mapped_column(Date)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_origin: Mapped[str] = mapped_column(String(32), default="UNKNOWN", nullable=False)
+    source_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT")
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
     index: Mapped[MarketIndex] = relationship(back_populates="memberships")
     security: Mapped[Security] = relationship()
 
@@ -208,6 +237,13 @@ class TradingCalendar(Base):
     session_close: Mapped[time | None] = mapped_column(Time)
     session_type: Mapped[str] = mapped_column(String(32), default="REGULAR", nullable=False)
     notes: Mapped[str | None] = mapped_column(String(255))
+    data_origin: Mapped[str] = mapped_column(String(32), default="UNKNOWN", nullable=False)
+    source_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT")
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
 
 
 class StrategyDefinition(TimestampMixin, Base):
@@ -224,7 +260,13 @@ class StrategyDefinition(TimestampMixin, Base):
 
 class DataIngestionRun(Base):
     __tablename__ = "data_ingestion_runs"
-    __table_args__ = (Index("ix_data_ingestion_runs_status_completed", "status", "completed_at"),)
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'SUCCESS', 'PARTIAL', 'FAILED')",
+            name="valid_ingestion_status",
+        ),
+        Index("ix_data_ingestion_runs_status_completed", "status", "completed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     dataset_code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -235,6 +277,87 @@ class DataIngestionRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     records_written: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_summary: Mapped[str | None] = mapped_column(Text)
+    requested_start: Mapped[date | None] = mapped_column(Date)
+    requested_end: Mapped[date | None] = mapped_column(Date)
+    parser_version: Mapped[str | None] = mapped_column(String(32))
+    inserted_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unchanged_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    conflict_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    warning_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class SourceArtifact(Base):
+    """Checksum-addressed metadata for one official/public source file."""
+
+    __tablename__ = "source_artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            "parse_status IN ('SUCCEEDED', 'PARTIAL', 'FAILED', 'CONFLICT')",
+            name="valid_artifact_parse_status",
+        ),
+        UniqueConstraint(
+            "provider", "artifact_type", "source_date", "sha256",
+            name="uq_source_artifacts_identity",
+        ),
+        Index("ix_source_artifacts_type_date", "artifact_type", "source_date"),
+        Index("ix_source_artifacts_imported_at", "imported_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    source_date: Mapped[date] = mapped_column(Date, nullable=False)
+    original_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_locator: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    parser_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_schema_version: Mapped[str | None] = mapped_column(String(32))
+    normalized_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    parse_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    accepted_row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    warning_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    storage_key: Mapped[str | None] = mapped_column(String(255))
+    artifact_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class IngestionIssue(Base):
+    """Bounded structured rejection, conflict, or warning tied to an artifact."""
+
+    __tablename__ = "ingestion_issues"
+    __table_args__ = (
+        CheckConstraint("severity IN ('ERROR', 'WARNING', 'INFO')", name="valid_issue_severity"),
+        Index("ix_ingestion_issues_artifact_severity", "source_artifact_id", "severity"),
+        Index("ix_ingestion_issues_code_created", "code", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_artifact_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT"), nullable=False
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    row_number: Mapped[int | None] = mapped_column(Integer)
+    row_key: Mapped[str | None] = mapped_column(String(160))
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    issue_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ResearchExperiment(Base):

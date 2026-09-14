@@ -38,10 +38,10 @@ class DemoMarketDataProvider(MarketDataProvider):
 
     def get_security_master(self) -> list[dict]:
         return [
-            {"exchange": "NSE", "symbol": "ALPHAIND", "trading_symbol": "ALPHAIND-EQ", "company_name": "Alpha Industries Demo Ltd", "isin": "DEMO00000001", "security_type": "EQUITY", "sector": "Industrials", "industry": "Capital Goods", "currency": "INR", "listing_date": date(2020, 1, 1), "is_active": True},
-            {"exchange": "NSE", "symbol": "BETATECH", "trading_symbol": "BETATECH-EQ", "company_name": "Beta Technology Demo Ltd", "isin": "DEMO00000002", "security_type": "EQUITY", "sector": "Information Technology", "industry": "Software", "currency": "INR", "listing_date": date(2021, 3, 15), "is_active": True},
-            {"exchange": "NSE", "symbol": "GAMMAFIN", "trading_symbol": "GAMMAFIN-EQ", "company_name": "Gamma Finance Demo Ltd", "isin": "DEMO00000003", "security_type": "EQUITY", "sector": "Financial Services", "industry": "Consumer Finance", "currency": "INR", "listing_date": date(2019, 7, 4), "is_active": True},
-            {"exchange": "NSE", "symbol": "OLDCO", "trading_symbol": "OLDCO-EQ", "company_name": "Old Company Demo Ltd", "isin": "DEMO00000004", "security_type": "EQUITY", "sector": "Materials", "industry": "Specialty Chemicals", "currency": "INR", "listing_date": date(2018, 5, 10), "delisting_date": date(2025, 2, 14), "is_active": False},
+            {"exchange": "NSE", "symbol": "ALPHAIND", "trading_symbol": "ALPHAIND-EQ", "series": "EQ", "company_name": "Alpha Industries Demo Ltd", "isin": "DEMO00000001", "security_type": "EQUITY", "sector": "Industrials", "industry": "Capital Goods", "currency": "INR", "listing_date": date(2020, 1, 1), "is_active": True, "data_origin": "DEMO"},
+            {"exchange": "NSE", "symbol": "BETATECH", "trading_symbol": "BETATECH-EQ", "series": "EQ", "company_name": "Beta Technology Demo Ltd", "isin": "DEMO00000002", "security_type": "EQUITY", "sector": "Information Technology", "industry": "Software", "currency": "INR", "listing_date": date(2021, 3, 15), "is_active": True, "data_origin": "DEMO"},
+            {"exchange": "NSE", "symbol": "GAMMAFIN", "trading_symbol": "GAMMAFIN-EQ", "series": "EQ", "company_name": "Gamma Finance Demo Ltd", "isin": "DEMO00000003", "security_type": "EQUITY", "sector": "Financial Services", "industry": "Consumer Finance", "currency": "INR", "listing_date": date(2019, 7, 4), "is_active": True, "data_origin": "DEMO"},
+            {"exchange": "NSE", "symbol": "OLDCO", "trading_symbol": "OLDCO-EQ", "series": "EQ", "company_name": "Old Company Demo Ltd", "isin": "DEMO00000004", "security_type": "EQUITY", "sector": "Materials", "industry": "Specialty Chemicals", "currency": "INR", "listing_date": date(2018, 5, 10), "delisting_date": date(2025, 2, 14), "is_active": False, "data_origin": "DEMO"},
         ]
 
     def get_daily_prices(self, start: date, end: date) -> list[dict]:
@@ -64,22 +64,22 @@ class DemoMarketDataProvider(MarketDataProvider):
                     high = max(open_, close) + Decimal("1.10")
                     low = min(open_, close) - Decimal("0.90")
                     volume = 100_000 + offset * 700 + index * 11_000
-                    rows.append({"symbol": symbol, "trading_date": day, "open": open_, "high": high, "low": low, "close": close, "volume": volume, "traded_value": (close * volume).quantize(Decimal("0.01")), "source": self.code})
+                    rows.append({"symbol": symbol, "trading_date": day, "open": open_, "high": high, "low": low, "close": close, "volume": volume, "traded_value": (close * volume).quantize(Decimal("0.01")), "source": self.code, "data_origin": "DEMO"})
             day += timedelta(days=1)
         return rows
 
     def get_corporate_actions(self) -> list[dict]:
         return [
-            {"symbol": "ALPHAIND", "action_type": "STOCK_SPLIT", "announcement_date": date(2025, 1, 10), "ex_date": date(2025, 2, 3), "record_date": date(2025, 2, 3), "ratio_numerator": Decimal("2"), "ratio_denominator": Decimal("1"), "notes": "Demo 2-for-1 split", "source": self.code, "available_at": _demo_legacy_availability(date(2025, 1, 10))},
-            {"symbol": "BETATECH", "action_type": "BONUS", "announcement_date": date(2025, 1, 15), "ex_date": date(2025, 2, 10), "record_date": date(2025, 2, 10), "ratio_numerator": Decimal("1"), "ratio_denominator": Decimal("1"), "notes": "Demo 1-for-1 bonus", "source": self.code, "available_at": _demo_legacy_availability(date(2025, 1, 15))},
+            {"symbol": "ALPHAIND", "action_type": "STOCK_SPLIT", "announcement_date": date(2025, 1, 10), "ex_date": date(2025, 2, 3), "record_date": date(2025, 2, 3), "ratio_numerator": Decimal("2"), "ratio_denominator": Decimal("1"), "notes": "Demo 2-for-1 split", "source": self.code, "available_at": _demo_legacy_availability(date(2025, 1, 10)), "data_origin": "DEMO"},
+            {"symbol": "BETATECH", "action_type": "BONUS", "announcement_date": date(2025, 1, 15), "ex_date": date(2025, 2, 10), "record_date": date(2025, 2, 10), "ratio_numerator": Decimal("1"), "ratio_denominator": Decimal("1"), "notes": "Demo 1-for-1 bonus", "source": self.code, "available_at": _demo_legacy_availability(date(2025, 1, 15)), "data_origin": "DEMO"},
         ]
 
     def get_index_membership(self) -> list[dict]:
         return [
-            {"index_symbol": "NIFTYDEMO100", "symbol": "ALPHAIND", "valid_from": date(2025, 1, 1), "valid_to": None, "source": self.code},
-            {"index_symbol": "NIFTYDEMO100", "symbol": "BETATECH", "valid_from": date(2025, 1, 1), "valid_to": date(2025, 2, 14), "source": self.code},
-            {"index_symbol": "NIFTYDEMO100", "symbol": "GAMMAFIN", "valid_from": date(2025, 2, 15), "valid_to": None, "source": self.code},
-            {"index_symbol": "NIFTYDEMO100", "symbol": "OLDCO", "valid_from": date(2025, 1, 1), "valid_to": date(2025, 2, 14), "source": self.code},
+            {"index_symbol": "NIFTYDEMO100", "symbol": "ALPHAIND", "valid_from": date(2025, 1, 1), "valid_to": None, "source": self.code, "data_origin": "DEMO"},
+            {"index_symbol": "NIFTYDEMO100", "symbol": "BETATECH", "valid_from": date(2025, 1, 1), "valid_to": date(2025, 2, 14), "source": self.code, "data_origin": "DEMO"},
+            {"index_symbol": "NIFTYDEMO100", "symbol": "GAMMAFIN", "valid_from": date(2025, 2, 15), "valid_to": None, "source": self.code, "data_origin": "DEMO"},
+            {"index_symbol": "NIFTYDEMO100", "symbol": "OLDCO", "valid_from": date(2025, 1, 1), "valid_to": date(2025, 2, 14), "source": self.code, "data_origin": "DEMO"},
         ]
 
     def get_fundamentals(self) -> list[dict]:

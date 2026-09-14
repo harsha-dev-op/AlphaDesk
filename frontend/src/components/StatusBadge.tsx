@@ -4,9 +4,9 @@ export type StatusTone = 'healthy' | 'warning' | 'failed' | 'neutral';
 
 export function statusTone(status: string): StatusTone {
   const normalized = status.toUpperCase();
-  if (normalized === 'HEALTHY' || normalized === 'ACTIVE' || normalized === 'SUCCESS') return 'healthy';
-  if (normalized === 'FAILED' || normalized === 'UNAVAILABLE' || normalized === 'INACTIVE') return 'failed';
-  if (normalized === 'WARNING' || normalized === 'DEGRADED' || normalized === 'STALE') return 'warning';
+  if (normalized === 'HEALTHY' || normalized === 'ACTIVE' || normalized === 'SUCCESS' || normalized === 'SUCCEEDED') return 'healthy';
+  if (normalized === 'FAILED' || normalized === 'CONFLICT' || normalized === 'UNAVAILABLE' || normalized === 'INACTIVE') return 'failed';
+  if (normalized === 'WARNING' || normalized === 'PARTIAL' || normalized === 'DEGRADED' || normalized === 'STALE') return 'warning';
   return 'neutral';
 }
 

@@ -22,5 +22,9 @@ def index_members(index: str, as_of: date | None = None, db: Session = Depends(g
     if not market_index:
         raise HTTPException(status_code=404, detail="Index not found")
     query_date = as_of or date.today()
+    try:
+        repository.assert_historical_coverage(market_index, query_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     memberships = repository.members_as_of(market_index.id, query_date)
     return IndexMembersResponse(index=IndexResponse.model_validate(market_index), as_of=query_date, members=[IndexMemberResponse(security=SecurityResponse.model_validate(item.security), valid_from=item.valid_from, valid_to=item.valid_to, source=item.source) for item in memberships])

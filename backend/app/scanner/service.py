@@ -149,6 +149,10 @@ class ScannerService:
         market_index = self.indices.get_by_name_or_symbol(request.universe)
         if not market_index:
             raise ScannerNotFoundError("Universe not found")
+        try:
+            self.indices.assert_historical_coverage(market_index, request.observation_date)
+        except ValueError as exc:
+            raise ScannerValidationError(str(exc)) from exc
         memberships = self.indices.members_as_of(market_index.id, request.observation_date)
         securities_by_id = {membership.security.id: membership.security for membership in memberships}
         securities = sorted(

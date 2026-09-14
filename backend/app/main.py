@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     backtests,
+    data_sources,
     features,
     health,
     indices,
@@ -34,6 +35,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="AlphaDesk API", version=settings.app_version, description="Point-in-time market-data, technical-feature, scanner, strategy, composition, backtest, and portfolio research foundation. No order execution.", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["*"])
 app.include_router(health.router)
+app.include_router(data_sources.router)
 app.include_router(securities.router)
 app.include_router(features.router)
 app.include_router(scanner.router)

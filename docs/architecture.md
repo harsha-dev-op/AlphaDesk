@@ -1,4 +1,4 @@
-# AlphaDesk Phase 7 architecture
+# AlphaDesk Phase 8 architecture
 
 ## Request flow
 
@@ -16,6 +16,9 @@ Routes translate HTTP concerns only. Services own adjustment, calendar, and qual
 - **Corporate actions:** `daily_prices` is raw and unique by security/session. Actions require `available_at <= as_of`; only the latest eligible append-only revision enters the derived split/bonus response.
 - **Missing data:** calendar gaps, stale coverage, impossible OHLCV, and duplicates return named health checks. They are never converted into a trading decision.
 - **Reproducibility:** ingestion runs record a `dataset_code` and `dataset_version`; strategies are keyed by stable UUID plus code/version.
+- **Source lineage:** each official artifact has a provider/type/date/SHA-256 identity, parser version, bounded issue register, and local ignored storage key. Accepted domain rows reference both artifact and run.
+- **Real/demo honesty:** source-bearing domain rows carry coarse `DEMO`, `OFFICIAL_NSE_PUBLIC`, or `UNKNOWN` origin; coverage derives `MIXED` when both coexist.
+- **Current constituents:** free Nifty 200/500 lists create intervals only from an explicit snapshot date. Requests before the first official snapshot fail with `HISTORICAL_MEMBERSHIP_COVERAGE_INCOMPLETE`.
 - **Technical features:** immutable code definitions and feature sets are computed on demand over the full available prefix. Each output carries the feature-set version, data provenance, adjustment policy, compute time, and exchange-close availability time.
 - **Adjusted point-in-time state:** feature results are snapshotted per corporate-action regime. Future split or bonus rows may rebase later calculations but cannot change an earlier observation's emitted values.
 - **Market scans:** historical membership is resolved at the requested observation date. Computation is capped at that date and its timezone-aware as-of timestamp, requires an exact-date feature row, and excludes any row whose `available_at` is later than scanner `as_of`.
@@ -25,7 +28,7 @@ Routes translate HTTP concerns only. Services own adjustment, calendar, and qual
 
 - A `STOCK_SPLIT` ratio of 2:1 stores numerator `2`, denominator `1`; pre-ex-date prices receive factor `1/2` and volume receives factor `2`.
 - A `BONUS` ratio of 1:1 stores numerator `1`, denominator `1`; pre-ex-date prices receive factor `1/(1+1)` and volume receives factor `2`.
-- `source_published_at` is used only when trustworthy; otherwise `available_at` equals local `ingested_at`. `announcement_date` remains informational. The fictional legacy/demo backfill uses announcement-date end-of-day IST only as an explicitly non-truth deterministic fallback.
+- `source_published_at` is used only when trustworthy. Phase 8 official/public imports without it are quarantined and never fabricate `available_at`; the pre-existing fictional legacy/demo backfill remains the only path using its explicitly non-truth deterministic fallback.
 - Corrections append a new row whose `supersedes_action_id` points to the prior row. Repository reads gate by availability, resolve the latest eligible row, then apply the ex-date horizon. Original rows remain UUID-addressable and future revisions cannot leak backward.
 - Cash dividends, rights, mergers, and demergers are preserved as events but deliberately do not receive a guessed price adjustment in Phase 1. A provider-specific policy and validation suite must precede those calculations.
 
@@ -121,3 +124,25 @@ The module is read-only with respect to PostgreSQL. It adds no schema, stored ru
 Phase 7 adds a separate immutable `CONSENSUS_N_OF_M` v1 registry above the unchanged Phase 4 strategies. `ResearchService` canonicalizes strategy/version/parameter components, resolves their 13-feature union, and calls the authoritative Phase 4 batch technical path once for the entire historical universe. Each strategy consumes the same exact-date, availability-gated feature row; composition then preserves matched, not-matched, and potentially-outcome-changing insufficient-history states for every member.
 
 Ephemeral evaluation remains read-only. Explicit save/replay endpoints write only immutable normalized experiment definitions and compact append-only run provenance to `research_experiments` and `research_experiment_runs`. Config, eligible dataset, and run fingerprints support order-invariant reproduction and distinguish eligible historical-data drift from engine/result drift. No market history, strategy rules, or executable expressions are persisted in experiment JSON. See [the Phase 7 research composition specification](research_composition.md).
+
+## Phase 8 official/public NSE data flow
+
+```text
+official HTTPS or data/nse/inbox
+             ↓
+host/MIME/size/archive/schema validation
+             ↓
+typed MII / UDiFF / constituent / action / holiday parser
+             ↓
+checksum artifact + bounded structured issues + transactional write plan
+             ↓
+existing security / raw price / action / membership / calendar tables
+             ↓
+unchanged technical → scanner → strategy → backtest → portfolio → research paths
+```
+
+`daily_prices` remains the immutable RAW tape. Phase 8 does not calculate or store a second adjusted series; the existing availability-gated adjustment service remains authoritative. The MII master resolves symbol plus ISIN as one identity and refuses ambiguity. UDiFF imports batch-resolve all securities and existing date rows, accept only CM `EQ`, and never update conflicting history.
+
+Current Nifty 200/500 CSVs must resolve exactly their expected member counts. A later snapshot closes previous open intervals on the day before the new snapshot while preserving earlier queries. It does not establish coverage before the first import. Corporate-action parsing promotes only unambiguous split/bonus rows with a real timezone-aware source publication timestamp; all missing timestamps are retained as issue evidence, not fabricated as `available_at`.
+
+Direct requests are serialized and bounded. HTTP 403 ends immediately; timeouts, 429, and 5xx receive limited retries. The importer retains untrusted files only in project-local ignored checksum-addressed storage and never serves raw bulk artifacts through HTTP. See [source audit](nse_data_sources.md) and [operator runbook](data_ingestion.md).

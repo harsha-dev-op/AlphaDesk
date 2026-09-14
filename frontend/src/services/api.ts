@@ -1,4 +1,4 @@
-import type { BacktestMetadata, BacktestRunRequest, BacktestRunResponse, CompositionEvaluationRequest, CompositionEvaluationResponse, CompositionMetadata, ExperimentCreateRequest, ExperimentCreateResponse, ExperimentDefinition, ExperimentListResponse, ExperimentReplayResponse, ExperimentRunListResponse, FeatureCatalog, FeatureSetCatalog, HealthResponse, MarketScanRequest, MarketScanResponse, PortfolioMetadata, PortfolioRunRequest, PortfolioRunResponse, PriceSeries, QualityResponse, ScannerMetadata, SecuritiesPage, Security, SecurityFeatureSeries, StrategyCatalog, StrategyEvaluationRequest, StrategyEvaluationResponse } from '@/src/types/api';
+import type { BacktestMetadata, BacktestRunRequest, BacktestRunResponse, CompositionEvaluationRequest, CompositionEvaluationResponse, CompositionMetadata, DataCoverageResponse, DataSourcesResponse, ExperimentCreateRequest, ExperimentCreateResponse, ExperimentDefinition, ExperimentListResponse, ExperimentReplayResponse, ExperimentRunListResponse, FeatureCatalog, FeatureSetCatalog, HealthResponse, MarketScanRequest, MarketScanResponse, PortfolioMetadata, PortfolioRunRequest, PortfolioRunResponse, PriceSeries, QualityResponse, ScannerMetadata, SecuritiesPage, Security, SecurityFeatureSeries, StrategyCatalog, StrategyEvaluationRequest, StrategyEvaluationResponse } from '@/src/types/api';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -33,6 +33,8 @@ export const api = {
     return request<SecuritiesPage>(`/api/v1/securities?${params}`, signal);
   },
   quality: (signal?: AbortSignal) => request<QualityResponse>('/api/v1/data-quality/status', signal),
+  dataSources: (signal?: AbortSignal) => request<DataSourcesResponse>('/api/v1/data-sources', signal),
+  dataCoverage: (signal?: AbortSignal) => request<DataCoverageResponse>('/api/v1/data-coverage', signal),
   security: (symbol: string, signal?: AbortSignal) => request<Security>(`/api/v1/securities/${encodeURIComponent(symbol)}`, signal),
   prices: (symbol: string, view: 'raw' | 'adjusted', signal?: AbortSignal) => request<PriceSeries>(`/api/v1/securities/${encodeURIComponent(symbol)}/prices?view=${view}`, signal),
   featureCatalog: (signal?: AbortSignal) => request<FeatureCatalog>('/api/v1/features/catalog', signal),
