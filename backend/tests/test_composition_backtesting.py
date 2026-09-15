@@ -34,6 +34,7 @@ from app.technical.service import TechnicalFeatureService
 
 
 IST = ZoneInfo("Asia/Kolkata")
+PHASE9_GOLDEN_NAMESPACE = uuid.UUID("1e5f1875-953b-43dc-b0aa-16dc754a5654")
 
 
 def _sessions(count: int, start: date = date(2023, 1, 2)) -> list[date]:
@@ -48,7 +49,7 @@ def _sessions(count: int, start: date = date(2023, 1, 2)) -> list[date]:
 
 def _security(symbol: str) -> Security:
     return Security(
-        id=uuid.uuid4(),
+        id=uuid.uuid5(PHASE9_GOLDEN_NAMESPACE, f"security:{symbol}"),
         exchange="NSE",
         symbol=symbol,
         trading_symbol=f"{symbol}-EQ",
@@ -62,6 +63,7 @@ def _security(symbol: str) -> Security:
 def seed_history(db, *, security_count: int = 3, session_count: int = 230):
     sessions = _sessions(session_count)
     universe = MarketIndex(
+        id=uuid.uuid5(PHASE9_GOLDEN_NAMESPACE, "index:P9HIST"),
         name="Phase 9 Historical",
         symbol="P9HIST",
         provider="TEST",
@@ -73,6 +75,10 @@ def seed_history(db, *, security_count: int = 3, session_count: int = 230):
     for security in securities:
         db.add(
             IndexMembership(
+                id=uuid.uuid5(
+                    PHASE9_GOLDEN_NAMESPACE,
+                    f"membership:{universe.id}:{security.id}:{sessions[0]}",
+                ),
                 index_id=universe.id,
                 security_id=security.id,
                 valid_from=sessions[0],
@@ -82,6 +88,7 @@ def seed_history(db, *, security_count: int = 3, session_count: int = 230):
     for session_index, day in enumerate(sessions):
         db.add(
             TradingCalendar(
+                id=uuid.uuid5(PHASE9_GOLDEN_NAMESPACE, f"calendar:{day}"),
                 exchange="NSE",
                 trading_date=day,
                 is_trading_day=True,
@@ -98,6 +105,10 @@ def seed_history(db, *, security_count: int = 3, session_count: int = 230):
             volume = 1_000_000 + session_index * 2_000 + security_index
             db.add(
                 DailyPrice(
+                    id=uuid.uuid5(
+                        PHASE9_GOLDEN_NAMESPACE,
+                        f"price:{security.id}:{day}",
+                    ),
                     security_id=security.id,
                     trading_date=day,
                     open=close - Decimal("0.10"),
@@ -111,6 +122,7 @@ def seed_history(db, *, security_count: int = 3, session_count: int = 230):
             )
     db.add(
         DataIngestionRun(
+            id=uuid.uuid5(PHASE9_GOLDEN_NAMESPACE, "ingestion:phase9_fixture:v1"),
             dataset_code="phase9_fixture",
             dataset_version="v1",
             provider="TEST",
@@ -205,6 +217,94 @@ def portfolio_request(sessions, **overrides) -> CompositionPortfolioRequest:
     return CompositionPortfolioRequest(**payload)
 
 
+def test_phase9_golden_outputs_are_byte_stable_before_performance_changes(db):
+    """Freeze representative Phase 9 identities and research outputs for Phase 10."""
+    sessions, _, _ = seed_history(db)
+    service = HistoricalCompositionService(db)
+    prepared = service.prepare(backtest_request(sessions))
+    backtest = service.run_backtest(backtest_request(sessions))
+    portfolio = service.run_portfolio(portfolio_request(sessions))
+
+    assert prepared.dataset_fingerprint == (
+        "0690382e07d5d811ecdacc8a8b9a9e519069f8ebc309b009e12fafb2a687609a"
+    )
+    assert prepared.signal_fingerprint == (
+        "8aba5569eb08304fa5860aa841c8e6f3bccc6a82afe80e4fb04a567578fef58f"
+    )
+    assert (len(prepared.outcomes), len(prepared.setups)) == (96, 93)
+    assert prepared.outcomes[0].result_fingerprint == (
+        "3a693ae86d60c18cdaa15db6540f4b75de02faf8e8143e4f0e7c48e82dda113a"
+    )
+    assert prepared.outcomes[-1].result_fingerprint == (
+        "f9c3090294741445c914cede1149c717f87270495363dd089f602c391561118a"
+    )
+    assert prepared.setups[0].signal_result_fingerprint == (
+        "d0056d8780c4815c54f00390259ef808d816effb51c499fce46fdad6fdfe4061"
+    )
+    assert prepared.setups[-1].signal_result_fingerprint == (
+        "f9c3090294741445c914cede1149c717f87270495363dd089f602c391561118a"
+    )
+
+    assert backtest.backtest_config_fingerprint == (
+        "5108a58594e7193f5e1c5dea7b6c1a0199f53076c209b090cec596ec33bcb5fe"
+    )
+    assert backtest.backtest_run_fingerprint == (
+        "0f809d3bb50df5582eb908f377064d82500489830be719355409702d8bf30a24"
+    )
+    assert backtest.total_trade_count == 24
+    assert [backtest.trades[0].trade_fingerprint, backtest.trades[-1].trade_fingerprint] == [
+        "ab1aa592a6180741a556411239afb5911590416a888d62a77dd3e16c6ce18144",
+        "823ce30427b607122c729d97129960acdc3c3d288178fbb0426f4a3ed427580a",
+    ]
+    assert backtest.cost_analytics.total == Decimal("5360.69")
+    assert backtest.analytics.total_net_pnl == Decimal("11210.71")
+    assert backtest.analytics.average_net_return == Decimal("0.00467518")
+
+    assert portfolio.portfolio_config_fingerprint == (
+        "321543572a599705a0f5e9db01d19dd74239bcc06b1332818f0d1e1a9782f917"
+    )
+    assert portfolio.portfolio_run_fingerprint == (
+        "4c15c5cb6d4047909ae007779b7bc8c43f7e14688f9588ac4a54669c58eb5fce"
+    )
+    assert (portfolio.total_position_count, portfolio.total_ledger_event_count) == (20, 81)
+    assert [
+        portfolio.positions[0].position_fingerprint,
+        portfolio.positions[-1].position_fingerprint,
+    ] == [
+        "8622df8380b0aeae86834b777b55d87b01534212508533e950ddd86caf6f11f8",
+        "c4c1e5cb1aa8136cfa4b081c05f953ec56ac936c73ab85bdccf97281c8eb8893",
+    ]
+    assert len(portfolio.daily_equity_curve) == 32
+    assert portfolio.daily_equity_curve[-1].portfolio_equity == Decimal("1051627.18")
+    assert portfolio.metrics.total_portfolio_return == Decimal("0.05162718")
+    assert portfolio.metrics.sharpe_ratio == Decimal("22.78150219")
+    assert portfolio.cost_analytics.total == Decimal("22835.52")
+
+
+def test_shared_prepared_context_preserves_complete_backtest_and_portfolio_outputs(db):
+    sessions, _, _ = seed_history(db)
+    backtest_input = backtest_request(sessions)
+    portfolio_input = portfolio_request(sessions)
+    service = HistoricalCompositionService(db)
+
+    independent_backtest = service.run_backtest(backtest_input)
+    independent_portfolio = service.run_portfolio(portfolio_input)
+    prepared = service.prepare(backtest_input)
+    shared_backtest = service.run_backtest_prepared(backtest_input, prepared)
+    shared_portfolio = service.run_portfolio_prepared(portfolio_input, prepared)
+
+    non_deterministic_fields = {"executed_at", "timings"}
+    assert shared_backtest.model_dump(exclude=non_deterministic_fields) == (
+        independent_backtest.model_dump(exclude=non_deterministic_fields)
+    )
+    assert shared_portfolio.model_dump(exclude=non_deterministic_fields) == (
+        independent_portfolio.model_dump(exclude=non_deterministic_fields)
+    )
+    assert shared_backtest.historical_signal_fingerprint == (
+        shared_portfolio.historical_signal_fingerprint
+    )
+
+
 def test_range_composition_generates_diagnostics_and_next_open_trades(db):
     sessions, _, securities = seed_history(db)
     result = HistoricalCompositionService(db).run_backtest(backtest_request(sessions))
@@ -276,18 +376,7 @@ def test_full_historical_feature_frame_matches_phase2_on_multiple_dates(db):
         feature_set=STRATEGY_TECHNICAL_SET,
         calendar_entries=calendar,
     )
-    representative = (
-        "SMA_200",
-        "MOM_6M_126D",
-        "VOLATILITY_20",
-        "VOLATILITY_60",
-        "RSI_14",
-        "ATR_14",
-        "VOLUME_RATIO_20",
-        "VOLUME_RATIO_50",
-        "PRIOR_HIGH_20",
-        "BREAKOUT_PCT_20",
-    )
+    representative = STRATEGY_TECHNICAL_SET.feature_codes
     for sample_day in (sessions[199], sessions[205], sessions[-1]):
         point = TechnicalFeatureService(db).compute(
             securities[0],

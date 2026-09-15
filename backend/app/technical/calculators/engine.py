@@ -37,18 +37,22 @@ def calculate_feature_frame(
         session_codes = {"GAP_PCT_1D", "INTRADAY_RETURN", "RANGE_PCT", "CLOSE_LOCATION"}
         structure_codes = {"PRIOR_HIGH_20", "BREAKOUT_PCT_20"}
         if selected is None or selected & return_codes:
-            calculate_returns(closes, output)
-        moving_averages = calculate_trend(closes, output) if selected is None or selected & trend_codes else None
+            calculate_returns(closes, output, selected)
+        moving_averages = (
+            calculate_trend(closes, output, selected)
+            if selected is None or selected & trend_codes
+            else None
+        )
         if selected is None or "RSI_14" in selected:
             calculate_rsi(closes, output)
         if selected is None or selected & volatility_codes:
             calculate_volatility(highs, lows, closes, output, selected)
         if selected is None or selected & liquidity_codes:
-            calculate_liquidity(points, output)
+            calculate_liquidity(points, output, selected)
         if selected is None or selected & session_codes:
-            calculate_session(opens, highs, lows, closes, output)
+            calculate_session(opens, highs, lows, closes, output, selected)
         if selected is None or selected & structure_codes:
-            calculate_price_structure(highs, closes, output)
+            calculate_price_structure(highs, closes, output, selected)
         if (selected is None or selected & state_codes) and moving_averages is not None:
-            calculate_trend_states(closes, moving_averages, output)
+            calculate_trend_states(closes, moving_averages, output, selected)
         return output

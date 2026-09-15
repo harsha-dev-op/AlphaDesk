@@ -10,7 +10,17 @@ from app.models import CorporateAction, DailyPrice, DataIngestionRun, IndexMembe
 from app.schemas.strategies import StrategyEvaluationRequest
 from app.strategies.definitions import INITIAL_STRATEGIES
 from app.strategies.registry import STRATEGY_DEFINITIONS, build_strategy_registry, find_strategy
-from app.strategies.service import StrategyService, StrategyValidationError, normalize_parameters, strategy_fingerprint
+from app.strategies.service import (
+    StrategyService,
+    StrategyValidationError,
+    evaluate_prepared_strategy,
+    evaluate_strategy_conditions,
+    normalize_parameters,
+    prepared_strategy_result_fingerprint,
+    prepare_strategy_evaluation,
+    strategy_fingerprint,
+    strategy_result_fingerprint,
+)
 from app.technical.calculators import PricePoint, calculate_feature_frame, calculate_latest_feature_snapshot
 from app.technical.definitions import CORE_TECHNICAL_SET, FEATURE_DEFINITIONS, STRATEGY_TECHNICAL_SET
 from app.technical.service import TechnicalFeatureService
@@ -172,6 +182,46 @@ def test_parameter_override_validation_and_fingerprint_sensitivity():
         normalize_parameters(definition, {"min_momentum_3m": True})
     with pytest.raises(StrategyValidationError, match="at most"):
         normalize_parameters(definition, {"min_momentum_3m": Decimal("6")})
+
+
+@pytest.mark.parametrize("row_index", [13, 49, 199, 219])
+def test_prepared_historical_strategy_path_matches_phase4_conditions(row_index):
+    frame = calculate_feature_frame([_point(index) for index in range(220)])
+    for definition in INITIAL_STRATEGIES:
+        parameters = normalize_parameters(definition, {})
+        values = {
+            code: frame[row_index][code]
+            for code in definition.required_feature_codes
+        }
+        conditions = evaluate_strategy_conditions(
+            definition,
+            parameters,
+            values,
+            {code: FEATURE_DEFINITIONS[code].version for code in values},
+        )
+        prepared = prepare_strategy_evaluation(definition, parameters)
+        prepared_values, missing, matched = evaluate_prepared_strategy(
+            prepared,
+            frame[row_index],
+        )
+        assert prepared_values == values
+        assert missing is any(value is None for value in values.values())
+        assert matched is (not missing and all(item.passed for item in conditions))
+        fingerprint_arguments = {
+            "definition_fingerprint": strategy_fingerprint(
+                definition, parameters, "ADJUSTED"
+            ),
+            "observation_date": OBSERVATION,
+            "as_of": datetime.combine(OBSERVATION, time(15, 30), tzinfo=IST),
+            "security_id": "13867ee8-d5d9-4db5-80ca-cc0c42b2ace6",
+            "input_fingerprint": "phase10-parity-input",
+            "feature_state": values,
+            "matched": matched,
+        }
+        assert prepared_strategy_result_fingerprint(
+            prepared=prepared,
+            **fingerprint_arguments,
+        ) == strategy_result_fingerprint(**fingerprint_arguments)
 
 
 def test_strategy_service_returns_all_members_in_symbol_order_with_condition_details(db):

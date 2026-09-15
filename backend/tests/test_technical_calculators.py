@@ -6,7 +6,12 @@ from statistics import stdev
 import pytest
 
 from app.technical.calculators import PricePoint, calculate_feature_frame
-from app.technical.definitions import CORE_TECHNICAL_SET, FEATURE_DEFINITIONS
+from app.strategies.definitions import INITIAL_STRATEGIES
+from app.technical.definitions import (
+    CORE_TECHNICAL_SET,
+    FEATURE_DEFINITIONS,
+    STRATEGY_TECHNICAL_SET,
+)
 
 
 def point(index: int, *, close: Decimal | None = None, volume: int | None = None, traded: bool = True) -> PricePoint:
@@ -99,3 +104,45 @@ def test_invalid_denominators_and_missing_traded_values_return_null_not_non_fini
     assert values["CLOSE_LOCATION"] is None
     assert values["AVG_TRADED_VALUE_20"] is None
     assert all(isfinite(float(value)) for value in values.values() if isinstance(value, Decimal))
+
+
+@pytest.mark.parametrize("profile", ["constant", "small", "large", "gapped"])
+def test_selected_composition_timeline_is_exact_subset_of_authoritative_frame(profile):
+    points: list[PricePoint] = []
+    for index in range(230):
+        if profile == "constant":
+            close = Decimal("50")
+        elif profile == "small":
+            close = Decimal("0.0001") + Decimal(index) * Decimal("0.000001")
+        elif profile == "large":
+            close = Decimal("999999999999") + Decimal(index) * Decimal("12345.6789")
+        else:
+            close = Decimal("100") + Decimal(index % 11) * Decimal("17.25")
+        open_price = close if index % 9 else close * Decimal("0.75")
+        spread = close * (Decimal("0.90") if index % 17 == 0 else Decimal("0.01"))
+        low = max(Decimal(0), min(open_price, close) - spread)
+        high = max(open_price, close) + spread
+        volume = 0 if index % 23 == 0 else index + 1
+        points.append(
+            PricePoint(
+                trading_date=date(2020, 1, 1) + timedelta(days=index),
+                open=open_price,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+                traded_value=close * volume if index % 29 else None,
+                source="PHASE10_EDGE",
+            )
+        )
+
+    selected_codes = tuple(
+        sorted({rule.feature_code for definition in INITIAL_STRATEGIES for rule in definition.rules})
+    )
+    assert set(selected_codes).issubset(STRATEGY_TECHNICAL_SET.feature_codes)
+    full = calculate_feature_frame(points)
+    selected = calculate_feature_frame(points, selected_codes)
+    assert selected == [
+        {code: row[code] for code in selected_codes}
+        for row in full
+    ]

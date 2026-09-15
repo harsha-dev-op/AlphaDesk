@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import cProfile
+import io
 import json
+import pstats
 import time
 import uuid
 from datetime import date, time as clock, timedelta
@@ -308,6 +311,30 @@ def _measure(callable_):
     }
 
 
+def _measure_preparation(callable_):
+    select_count = 0
+    statement_count = 0
+
+    def count_queries(_connection, _cursor, statement, _parameters, _context, _many):
+        nonlocal select_count, statement_count
+        statement_count += 1
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_count += 1
+
+    event.listen(engine, "before_cursor_execute", count_queries)
+    try:
+        started = time.perf_counter()
+        result = callable_()
+        wall_ms = round((time.perf_counter() - started) * 1_000, 3)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_queries)
+    return result, {
+        "wall_ms": wall_ms,
+        "select_count": select_count,
+        "statement_count": statement_count,
+    }
+
+
 def run_case(count: int, sessions: list[date]) -> dict[str, object]:
     universe = f"{INDEX_PREFIX}{count}"
     source = {"inline_composition": _inline_source(sessions)}
@@ -340,8 +367,24 @@ def run_case(count: int, sessions: list[date]) -> dict[str, object]:
         portfolio, portfolio_measurement = _measure(
             lambda: service.run_portfolio(portfolio_request)
         )
+        prepared, preparation_measurement = _measure_preparation(
+            lambda: service.prepare(backtest_request)
+        )
+        shared_backtest, shared_backtest_measurement = _measure(
+            lambda: service.run_backtest_prepared(backtest_request, prepared)
+        )
+        shared_portfolio, shared_portfolio_measurement = _measure(
+            lambda: service.run_portfolio_prepared(portfolio_request, prepared)
+        )
         if backtest.historical_signal_fingerprint != portfolio.historical_signal_fingerprint:
             raise RuntimeError("Backtest and portfolio did not consume the same signal stream")
+        if (
+            shared_backtest.backtest_run_fingerprint
+            != backtest.backtest_run_fingerprint
+            or shared_portfolio.portfolio_run_fingerprint
+            != portfolio.portfolio_run_fingerprint
+        ):
+            raise RuntimeError("Shared prepared context changed deterministic research output")
         return {
             "security_count": count,
             "session_count": len(sessions),
@@ -366,7 +409,43 @@ def run_case(count: int, sessions: list[date]) -> dict[str, object]:
                 "phase6_execution_ms": portfolio.timings.execution_ms,
                 "analytics_ms": portfolio.timings.analytics_ms,
             },
+            "shared_context": {
+                "preparation": {
+                    **preparation_measurement,
+                    "data_fetch_ms": prepared.series_batch.repository_load_ms,
+                    "feature_generation_ms": prepared.series_batch.calculation_ms,
+                    "composition_evaluation_ms": prepared.composition_evaluation_ms,
+                    "signal_fingerprint_ms": prepared.signal_fingerprint_ms,
+                },
+                "backtest_adapter": shared_backtest_measurement,
+                "portfolio_adapter": shared_portfolio_measurement,
+            },
         }
+
+
+def profile_case(count: int, sessions: list[date]) -> str:
+    universe = f"{INDEX_PREFIX}{count}"
+    request = CompositionBacktestRequest(
+        source={"inline_composition": _inline_source(sessions)},
+        universe=universe,
+        start_date=sessions[0],
+        end_date=sessions[-1],
+        adjustment_policy="RAW",
+        holding_sessions=20,
+        diagnostic_detail_limit=0,
+        trade_detail_limit=0,
+    )
+    profiler = cProfile.Profile()
+    with SessionLocal() as session:
+        service = HistoricalCompositionService(session)
+        profiler.enable()
+        service.prepare(request)
+        profiler.disable()
+    output = io.StringIO()
+    pstats.Stats(profiler, stream=output).strip_dirs().sort_stats(
+        "cumulative"
+    ).print_stats(40)
+    return output.getvalue()
 
 
 def run() -> dict[str, object]:
@@ -388,10 +467,29 @@ def main() -> None:
         description="Synthetic PostgreSQL benchmark for Phase 9 composition research"
     )
     parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--profile-count", type=int, choices=(50, 200, 500))
     args = parser.parse_args()
     _verify_identity()
     if args.cleanup_only:
         print(json.dumps({"cleanup": cleanup()}, indent=2))
+        return
+    if args.profile_count is not None:
+        try:
+            sessions, preparation_ms = prepare_data()
+            profile = profile_case(args.profile_count, sessions)
+        finally:
+            cleaned = cleanup()
+        print(
+            json.dumps(
+                {
+                    "synthetic_data_preparation_ms": preparation_ms,
+                    "profile_security_count": args.profile_count,
+                    "profile": profile,
+                    "namespace_after_cleanup": cleaned,
+                },
+                indent=2,
+            )
+        )
         return
     try:
         result = run()

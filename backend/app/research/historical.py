@@ -17,7 +17,7 @@ from app.backtests.costs import (
     cost_model_metadata,
 )
 from app.backtests.definitions import BacktestProfileDefinition, CostModelDefinition
-from app.backtests.fingerprints import fingerprint
+from app.backtests.fingerprints import fingerprint, fingerprint_canonical
 from app.backtests.registry import cost_model_catalog, find_cost_model, find_profile
 from app.backtests.service import aggregate_costs, profile_metadata
 from app.backtests.simulator import SetupEvent, SimulationSettings, TradeSimulator
@@ -64,10 +64,11 @@ from app.schemas.research_history import (
     HistoricalSignalDiagnostics,
 )
 from app.strategies.service import (
-    evaluate_strategy_conditions,
+    evaluate_prepared_strategy,
+    prepared_strategy_result_fingerprint,
+    prepare_strategy_evaluation,
     strategy_fingerprint,
     strategy_metadata,
-    strategy_result_fingerprint,
 )
 from app.technical.registry import FEATURE_DEFINITIONS
 from app.technical.series import (
@@ -413,6 +414,12 @@ class HistoricalCompositionService:
             )
             for definition, parameters in resolved.components
         }
+        component_plans = {
+            (definition.strategy_code, definition.strategy_version): (
+                prepare_strategy_evaluation(definition, parameters)
+            )
+            for definition, parameters in resolved.components
+        }
         outcomes: list[_CompositionOutcome] = []
         setups: list[SetupEvent] = []
         for calendar_entry in sessions:
@@ -444,28 +451,24 @@ class HistoricalCompositionService:
                     else _decision_at(day, calendar_entry)
                 )
                 component_outcomes: list[_ComponentOutcome] = []
-                for definition, parameters in resolved.components:
-                    values = {
-                        code: (
-                            observation.values.get(code)
-                            if observation is not None
-                            else None
-                        )
-                        for code in definition.required_feature_codes
-                    }
-                    missing = any(value is None for value in values.values())
-                    conditions = evaluate_strategy_conditions(
-                        definition, parameters, values, feature_versions
+                for definition, _parameters in resolved.components:
+                    component_key = (
+                        definition.strategy_code,
+                        definition.strategy_version,
                     )
-                    matched = not missing and all(item.passed for item in conditions)
+                    values, missing, matched = evaluate_prepared_strategy(
+                        component_plans[component_key],
+                        observation.values if observation is not None else None,
+                    )
                     component_status: CompositionStatus = (
                         "INSUFFICIENT_FEATURE_HISTORY"
                         if missing
                         else ("MATCHED" if matched else "NOT_MATCHED")
                     )
-                    component_fp = strategy_result_fingerprint(
+                    component_fp = prepared_strategy_result_fingerprint(
+                        prepared=component_plans[component_key],
                         definition_fingerprint=component_fingerprints[
-                            (definition.strategy_code, definition.strategy_version)
+                            component_key
                         ],
                         observation_date=day,
                         as_of=decision_at,
@@ -494,11 +497,11 @@ class HistoricalCompositionService:
                     insufficient_count=insufficient_count,
                     required_count=resolved.normalized_request.required_match_count,
                 )
-                result_fp = fingerprint(
+                result_fp = fingerprint_canonical(
                     {
                         "composition_config_fingerprint": source.composition_config_fingerprint,
                         "security_id": str(security.id),
-                        "observation_date": day,
+                        "observation_date": day.isoformat(),
                         "input_fingerprint": input_fingerprint,
                         "status": status,
                         "matched_count": matched_count,
@@ -746,14 +749,88 @@ class HistoricalCompositionService:
             )
         return profile
 
+    def _assert_prepared_compatible(
+        self,
+        request: CompositionBacktestRequest | CompositionPortfolioRequest,
+        prepared: PreparedHistoricalComposition,
+    ) -> None:
+        expected = prepared.normalized_request
+        shared_fields = (
+            "universe",
+            "start_date",
+            "end_date",
+            "adjustment_policy",
+            "execution_policy_code",
+            "execution_policy_version",
+            "holding_sessions",
+        )
+        if any(getattr(request, field) != getattr(expected, field) for field in shared_fields):
+            raise ResearchInvariantError(
+                "Prepared historical context is incompatible with the execution request"
+            )
+        if request.source.inline_composition is not None:
+            resolved = self.research.resolve_composition(request.source.inline_composition)
+            compatible_source = (
+                prepared.source.source_type == "INLINE_COMPOSITION"
+                and resolved.config_fingerprint
+                == prepared.source.composition_config_fingerprint
+            )
+        else:
+            compatible_source = (
+                prepared.source.source_type == "SAVED_EXPERIMENT"
+                and request.source.experiment_id == prepared.source.experiment_id
+            )
+        if not compatible_source:
+            raise ResearchInvariantError(
+                "Prepared historical context has a different composition source"
+            )
+
+    @staticmethod
+    def _normalized_execution_request(
+        request: CompositionBacktestRequest | CompositionPortfolioRequest,
+        prepared: PreparedHistoricalComposition,
+    ) -> CompositionBacktestRequest | CompositionPortfolioRequest:
+        normalized_source = request.source.model_copy(
+            update={
+                "inline_composition": (
+                    prepared.resolved.normalized_request
+                    if request.source.inline_composition is not None
+                    else None
+                )
+            }
+        )
+        return request.model_copy(update={"source": normalized_source})
+
     def run_backtest(
         self,
         request: CompositionBacktestRequest,
     ) -> CompositionBacktestResponse:
         started = time.perf_counter()
         prepared = self.prepare(request)
+        return self._run_backtest_prepared(request, prepared, started=started)
+
+    def run_backtest_prepared(
+        self,
+        request: CompositionBacktestRequest,
+        prepared: PreparedHistoricalComposition,
+    ) -> CompositionBacktestResponse:
+        """Run Phase 5 from an explicit request-scoped historical signal context."""
+        self._assert_prepared_compatible(request, prepared)
+        return self._run_backtest_prepared(
+            request,
+            prepared,
+            started=time.perf_counter(),
+        )
+
+    def _run_backtest_prepared(
+        self,
+        request: CompositionBacktestRequest,
+        prepared: PreparedHistoricalComposition,
+        *,
+        started: float,
+    ) -> CompositionBacktestResponse:
         normalized_request = CompositionBacktestRequest.model_validate(
-            prepared.normalized_request.model_dump()
+            self._normalized_execution_request(request, prepared).model_dump()
         )
         profile = self._profile(prepared)
         cost_definition = self._resolve_cost_model(
@@ -961,8 +1038,30 @@ class HistoricalCompositionService:
     ) -> CompositionPortfolioResponse:
         started = time.perf_counter()
         prepared = self.prepare(request)
+        return self._run_portfolio_prepared(request, prepared, started=started)
+
+    def run_portfolio_prepared(
+        self,
+        request: CompositionPortfolioRequest,
+        prepared: PreparedHistoricalComposition,
+    ) -> CompositionPortfolioResponse:
+        """Run Phase 6 from an explicit request-scoped historical signal context."""
+        self._assert_prepared_compatible(request, prepared)
+        return self._run_portfolio_prepared(
+            request,
+            prepared,
+            started=time.perf_counter(),
+        )
+
+    def _run_portfolio_prepared(
+        self,
+        request: CompositionPortfolioRequest,
+        prepared: PreparedHistoricalComposition,
+        *,
+        started: float,
+    ) -> CompositionPortfolioResponse:
         normalized_request = CompositionPortfolioRequest.model_validate(
-            prepared.normalized_request.model_dump()
+            self._normalized_execution_request(request, prepared).model_dump()
         )
         profile = self._profile(prepared)
         cost_definition = self._resolve_cost_model(

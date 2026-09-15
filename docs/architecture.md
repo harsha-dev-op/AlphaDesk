@@ -1,4 +1,4 @@
-# AlphaDesk Phase 9 architecture
+# AlphaDesk Phase 10 architecture
 
 ## Request flow
 
@@ -170,3 +170,9 @@ Phase 5 TradeSimulator      Phase 6 PortfolioSimulator
 `COMPOSITION_NEXT_OPEN_FIXED_HOLD` v1 maps a matched close to the immediate next valid RAW open and the configured fixed-hold RAW open. It delegates execution, missing-price skips, overlap, stops/targets, corporate-action handling, India cash-delivery costs, analytics, portfolio allocation, the cash ledger, and risk metrics to the existing Phase 5 and Phase 6 engines. Both APIs consume the exact same ordered setup stream.
 
 The source composition fingerprint, eligible dataset/signal fingerprint, and backtest/portfolio execution fingerprints are separate. Historical membership, calendar, price, action revision, source-artifact, ingestion-run, feature-version, and engine provenance are bound deterministically. Changing capital or holding assumptions does not relabel the underlying signal stream. Results remain synchronous and unpersisted; no schema change, cache, snapshot, feature store, queue, optimizer, or trading path was introduced. See [the Phase 9 composition backtesting specification](composition_backtesting.md).
+
+## Phase 10 performance hardening
+
+Phase 10 preserves the flow above and removes measured request-local duplication. Immutable strategy evaluation plans resolve feature dependencies, operators, and thresholds once; the range calculator skips unrequested family outputs while retaining the same authoritative formulas; and exact canonical strategy-result bytes avoid recursive generic object normalization in the inner loop. An explicit `PreparedHistoricalComposition` may feed both execution adapters in one internal workflow. Public endpoints remain independent, and compatibility validation prevents a context from being reused with a different source, range, adjustment policy, execution policy, or holding period.
+
+This is not a global cache: the context is caller-owned, immutable at its record boundary, unpersisted, and contains one price/feature graph. Query batching remains 50 securities with 6/12/24 statements at 50/200/500 members. See [the Phase 10 performance report](phase10_performance.md) for profile evidence, exact parity coverage, memory considerations, and before/after measurements.

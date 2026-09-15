@@ -38,31 +38,68 @@ def trend_state_values(
     }
 
 
-def calculate_trend(closes: list[Decimal], output: list[dict[str, FeatureValue]]) -> dict[int, list[Decimal | None]]:
+def calculate_trend(
+    closes: list[Decimal],
+    output: list[dict[str, FeatureValue]],
+    feature_codes: set[str] | None = None,
+) -> dict[int, list[Decimal | None]]:
     count = len(closes)
     moving_averages: dict[int, list[Decimal | None]] = {}
+    required_by_window = {
+        20: {"SMA_20", "DISTANCE_SMA_20", "ABOVE_SMA_20", "SMA_20_ABOVE_50"},
+        50: {
+            "SMA_50",
+            "DISTANCE_SMA_50",
+            "ABOVE_SMA_50",
+            "SMA_20_ABOVE_50",
+            "SMA_50_ABOVE_200",
+        },
+        100: {"SMA_100"},
+        200: {"SMA_200", "DISTANCE_SMA_200", "ABOVE_SMA_200", "SMA_50_ABOVE_200"},
+    }
     for window in (20, 50, 100, 200):
+        if feature_codes is not None and not feature_codes & required_by_window[window]:
+            continue
         series: list[Decimal | None] = [None] * count
         for index in range(window - 1, count):
             series[index] = simple_moving_average(closes, index, window)
         moving_averages[window] = series
-        for index, value in enumerate(series):
-            output[index][f"SMA_{window}"] = value
+        code = f"SMA_{window}"
+        if feature_codes is None or code in feature_codes:
+            for index, value in enumerate(series):
+                output[index][code] = value
 
     for window in (20, 50):
+        code = f"EMA_{window}"
+        if feature_codes is not None and code not in feature_codes:
+            continue
         series = exponential_moving_average_series(closes, window)
         for index, value in enumerate(series):
-            output[index][f"EMA_{window}"] = value
+            output[index][code] = value
 
     for window in (20, 50, 200):
+        code = f"DISTANCE_SMA_{window}"
+        if feature_codes is not None and code not in feature_codes:
+            continue
         for index, average in enumerate(moving_averages[window]):
-            output[index][f"DISTANCE_SMA_{window}"] = distance_from_average(closes[index], average)
+            output[index][code] = distance_from_average(closes[index], average)
     return moving_averages
 
 
-def calculate_trend_states(closes: list[Decimal], moving_averages: dict[int, list[Decimal | None]], output: list[dict[str, FeatureValue]]) -> None:
+def calculate_trend_states(
+    closes: list[Decimal],
+    moving_averages: dict[int, list[Decimal | None]],
+    output: list[dict[str, FeatureValue]],
+    feature_codes: set[str] | None = None,
+) -> None:
+    sma20_series = moving_averages.get(20)
+    sma50_series = moving_averages.get(50)
+    sma200_series = moving_averages.get(200)
     for index in range(len(closes)):
-        sma20 = moving_averages[20][index]
-        sma50 = moving_averages[50][index]
-        sma200 = moving_averages[200][index]
-        output[index].update(trend_state_values(closes[index], sma20, sma50, sma200))
+        sma20 = sma20_series[index] if sma20_series is not None else None
+        sma50 = sma50_series[index] if sma50_series is not None else None
+        sma200 = sma200_series[index] if sma200_series is not None else None
+        values = trend_state_values(closes[index], sma20, sma50, sma200)
+        if feature_codes is not None:
+            values = {code: value for code, value in values.items() if code in feature_codes}
+        output[index].update(values)

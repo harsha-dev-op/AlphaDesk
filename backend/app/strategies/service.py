@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from json.encoder import encode_basestring_ascii
+from typing import Mapping
 
 from sqlalchemy.orm import Session
 
@@ -39,6 +42,22 @@ class StrategyNotFoundError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedStrategyRule:
+    feature_code: str
+    operator: StrategyOperator
+    expected_value: ParameterValue
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedStrategyEvaluation:
+    """Validated request-local strategy plan for repeated historical evaluation."""
+
+    required_feature_codes: tuple[str, ...]
+    canonical_feature_codes: tuple[str, ...]
+    rules: tuple[PreparedStrategyRule, ...]
+
+
 def _universe_metadata(index: MarketIndex) -> ScannerUniverseMetadata:
     return ScannerUniverseMetadata(
         id=index.id,
@@ -68,6 +87,11 @@ def _canonical(value: object) -> object:
 
 def _fingerprint(payload: object) -> str:
     encoded = json.dumps(_canonical(payload), separators=(",", ":"), sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _fingerprint_canonical(payload: object) -> str:
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -144,14 +168,17 @@ def strategy_result_fingerprint(
     matched: bool,
 ) -> str:
     """Build the stable Phase 4 security-result identity for shared consumers."""
-    return _fingerprint(
+    return _fingerprint_canonical(
         {
             "strategy_fingerprint": definition_fingerprint,
             "observation_date": str(observation_date),
-            "as_of": as_of,
+            "as_of": _canonical(as_of),
             "security_id": str(security_id),
             "input_fingerprint": input_fingerprint,
-            "feature_state": feature_state,
+            "feature_state": {
+                str(code): _canonical(value)
+                for code, value in feature_state.items()
+            },
             "matched": matched,
         }
     )
@@ -250,6 +277,82 @@ def evaluate_strategy_conditions(
         )
         for rule in definition.rules
     ]
+
+
+def prepare_strategy_evaluation(
+    definition: StrategyDefinition,
+    parameters: Mapping[str, ParameterValue],
+) -> PreparedStrategyEvaluation:
+    """Compile already-validated strategy metadata once for a historical request."""
+    return PreparedStrategyEvaluation(
+        required_feature_codes=definition.required_feature_codes,
+        canonical_feature_codes=tuple(sorted(definition.required_feature_codes)),
+        rules=tuple(
+            PreparedStrategyRule(
+                feature_code=rule.feature_code,
+                operator=rule.operator,
+                expected_value=parameters[rule.parameter_code],
+            )
+            for rule in definition.rules
+        ),
+    )
+
+
+def evaluate_prepared_strategy(
+    prepared: PreparedStrategyEvaluation,
+    observation_values: Mapping[str, Decimal | bool | None] | None,
+) -> tuple[dict[str, Decimal | bool | None], bool, bool]:
+    """Evaluate the Phase 4 rules without allocating response-only Pydantic models."""
+    values = {
+        code: observation_values.get(code) if observation_values is not None else None
+        for code in prepared.required_feature_codes
+    }
+    missing = any(value is None for value in values.values())
+    matched = not missing and all(
+        _condition_passes(
+            values[rule.feature_code],
+            rule.operator,
+            rule.expected_value,
+        )
+        for rule in prepared.rules
+    )
+    return values, missing, matched
+
+
+def prepared_strategy_result_fingerprint(
+    *,
+    prepared: PreparedStrategyEvaluation,
+    definition_fingerprint: str,
+    observation_date: object,
+    as_of: datetime,
+    security_id: object,
+    input_fingerprint: str,
+    feature_state: Mapping[str, Decimal | bool | None],
+    matched: bool,
+) -> str:
+    """Hash the exact Phase 4 payload without rebuilding its generic object graph."""
+
+    def encode_feature_value(value: Decimal | bool | None) -> str:
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return encode_basestring_ascii(_normalized_decimal(value))
+
+    feature_json = ",".join(
+        f"{encode_basestring_ascii(code)}:{encode_feature_value(feature_state[code])}"
+        for code in prepared.canonical_feature_codes
+    )
+    encoded = (
+        f'{{"as_of":{encode_basestring_ascii(as_of.astimezone(UTC).isoformat())},'
+        f'"feature_state":{{{feature_json}}},'
+        f'"input_fingerprint":{encode_basestring_ascii(input_fingerprint)},'
+        f'"matched":{"true" if matched else "false"},'
+        f'"observation_date":{encode_basestring_ascii(str(observation_date))},'
+        f'"security_id":{encode_basestring_ascii(str(security_id))},'
+        f'"strategy_fingerprint":{encode_basestring_ascii(definition_fingerprint)}}}'
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _display_value(value: Decimal | bool | None) -> str:

@@ -83,9 +83,9 @@ Requests reject ambiguous/missing sources, unknown saved experiments, unsupporte
 
 The `/research` Historical Analysis view supports inline evaluated compositions and immutable saved experiments. It exposes explicit range, universe, RAW/ADJUSTED, holding, slippage, stop/target, and applicable capital/allocation inputs. Backtest results include headline metrics, bounded trades, provenance, and fingerprints. Portfolio results include risk metrics, equity/drawdown charts, positions, trades, warnings, and the shared signal identity. The UI states that outputs are historical research simulations, not recommendations or live execution.
 
-## PostgreSQL benchmark
+## PostgreSQL benchmark and Phase 10 optimization
 
-The guarded benchmark uses only local PostgreSQL database `alphadesk_dev` as user `alphadesk`, a separate synthetic exchange/date/symbol/index namespace, 300 sessions per security, all three Phase 4 strategies, `CONSENSUS_N_OF_M` v1 with N=2, and ADJUSTED features. It measures each endpoint separately and removes the namespace in `finally`.
+The guarded benchmark uses only local PostgreSQL database `alphadesk_dev` as user `alphadesk`, a separate synthetic exchange/date/symbol/index namespace, 300 sessions per security, all three Phase 4 strategies, `CONSENSUS_N_OF_M` v1 with N=2, and RAW features. It measures each endpoint separately and removes the namespace in `finally`.
 
 | Members | Price rows | Endpoint | Wall time | SELECTs | Fetch | Features | Composition | Phase 5/6 execution |
 | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -106,6 +106,8 @@ cd backend
 ```
 
 Use `--cleanup-only` to remove the reserved namespace without running measurements.
+
+Phase 10 adds `--profile-count 50|200|500` and explicit prepared-context measurements while leaving the two independent endpoint measurements first and directly comparable. It removes repeated response-model construction and generic canonicalization from the historical inner loop, skips unrelated feature-family outputs, and allows one request-local prepared signal source to feed both execution adapters. Golden tests prove the existing fingerprints and outputs are unchanged. See [the Phase 10 performance report](phase10_performance.md) for the exact profile and before/after tables; at 500×300 the dominant preparation stages improved 2.071×, backtest wall time 2.026×, and portfolio wall time 1.953× with the same 24 statements and result counts.
 
 ## Verification and limitations
 

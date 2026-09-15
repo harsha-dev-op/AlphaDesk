@@ -28,4 +28,10 @@ def fingerprint(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-__all__ = ["canonical", "fingerprint"]
+def fingerprint_canonical(value: object) -> str:
+    """Fingerprint data whose leaves are already in canonical JSON form."""
+    encoded = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+__all__ = ["canonical", "fingerprint", "fingerprint_canonical"]

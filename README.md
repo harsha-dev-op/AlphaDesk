@@ -1,6 +1,6 @@
 # AlphaDesk
 
-AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 9 composition-aware historical research layer** above the Phase 8 official/public NSE EOD foundation: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic versioned strategy setups, an independent-trade backtester, a finite-capital portfolio/risk simulator, and order-invariant multi-strategy research composition with saved experiment provenance and historical replay. It does not rank securities, generate recommendations, optimize strategies, connect to brokers, or place real or paper orders.
+AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 10 performance-hardened composition-aware historical research layer** above the Phase 8 official/public NSE EOD foundation: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic versioned strategy setups, an independent-trade backtester, a finite-capital portfolio/risk simulator, and order-invariant multi-strategy research composition with saved experiment provenance and historical replay. It does not rank securities, generate recommendations, optimize strategies, connect to brokers, or place real or paper orders.
 
 ## What is included
 
@@ -23,6 +23,7 @@ AlphaDesk is an AI-assisted quantitative research platform for Indian markets. T
 - A separate immutable portfolio-policy registry, shared non-negative cash ledger, deterministic equal-slot allocation, entry constraints, daily RAW-close marks, and portfolio-valid risk analytics
 - A separate immutable composition-policy registry, shared feature computation, explicit N-of-M/missing-history semantics, deterministic composition fingerprints, and optional saved experiments with append-only replay runs
 - Composition-aware range replay with one canonical setup stream feeding the unchanged Phase 5 trade and Phase 6 portfolio simulators, versioned execution assumptions, separated signal/execution fingerprints, and bounded audits
+- Profile-guided historical performance hardening with request-local prepared strategy plans, exact fast-path fingerprints, union-only feature work, and an explicit prepared context reusable by both simulators
 - React 19, Vite/Vinext, Tailwind CSS, reusable UI primitives, and responsive financial-operations pages
 - Isolated backend tests; no paid APIs or external credentials
 - Safe official/public NSE MII security-master and CM UDiFF raw EOD ingestion with local-file fallback
@@ -167,6 +168,7 @@ See [the Phase 5 backtesting engine specification](docs/backtesting_engine.md) f
 See [the Phase 6 portfolio/risk engine specification](docs/portfolio_risk_engine.md) for finite-capital allocation, cash accounting, daily event order, point-in-time safeguards, risk formulas, APIs, UI, tests, and PostgreSQL measurements.
 See [the Phase 7 research composition specification](docs/research_composition.md) for N-of-M semantics, shared technical computation, order invariance, fingerprints, saved experiments, replay drift, APIs, UI, tests, and PostgreSQL measurements.
 See [the Phase 9 composition backtesting specification](docs/composition_backtesting.md) for historical N-of-M replay, canonical setup generation, Phase 5/6 reuse, point-in-time safeguards, fingerprints, APIs, UI, tests, and PostgreSQL measurements.
+See [the Phase 10 performance report](docs/phase10_performance.md) for profiling evidence, parity guarantees, prepared-context design, exact before/after PostgreSQL measurements, query counts, memory bounds, and deferred optimizations.
 See [the official/public NSE source audit](docs/nse_data_sources.md) and [the ingestion runbook](docs/data_ingestion.md) for source contracts, responsible access, local fallback, CLI commands, validation, provenance, and bounded backfill operations.
 
 ## Verification
@@ -188,7 +190,7 @@ npm run lint
 npm run build
 ```
 
-Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted split/bonus continuity, point-in-time availability/revisions, catalogs, versions, batch/latest/historical equivalence, bounded query shape, scanner validation, Phase 4 strategies, Phase 5 independent trades, Phase 6 allocation/cash/actions/marks/risk/OOS, Phase 7 composition/experiment/replay/fingerprint/API behavior, Phase 8 ingestion, and Phase 9 composition range replay through both existing simulation engines.
+Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted split/bonus continuity, point-in-time availability/revisions, catalogs, versions, batch/latest/historical equivalence, bounded query shape, scanner validation, Phase 4 strategies, Phase 5 independent trades, Phase 6 allocation/cash/actions/marks/risk/OOS, Phase 7 composition/experiment/replay/fingerprint/API behavior, Phase 8 ingestion, Phase 9 composition range replay through both existing simulation engines, and Phase 10 fast-path/golden/shared-context parity.
 
 ## Phase 9 limitations
 
@@ -204,6 +206,6 @@ Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted 
 - Public corporate-action CSV rows without trustworthy publication timestamps remain quarantined and cannot influence point-in-time adjustments.
 - Phase 8 is EOD-only and operator initiated; there is no scheduler, bulk redistribution endpoint, streaming quote path, or multi-year autonomous download.
 
-## Architecture decision after Phase 9
+## Architecture decision after Phase 10
 
-Official data is normalized into the same security, raw-price, action, membership, and calendar tables consumed by the entire research stack. Phase 9 computes the component feature union once, evaluates the unchanged Phase 4 strategies with Phase 7 consensus semantics, and passes matched outcomes to the unchanged Phase 5/6 simulators. Source configuration, signal identity, and execution identity remain separate. No migration, cache, feature store, optimizer, broker, background worker, or persistent historical-run table is justified.
+Official data is normalized into the same security, raw-price, action, membership, and calendar tables consumed by the entire research stack. Phase 10 keeps the Phase 9 semantics but resolves immutable strategy plans once, avoids response-only hot-loop allocations, computes only the registered composition feature union, and can explicitly share one request-local prepared signal context across the unchanged Phase 5/6 simulators. Source configuration, signal identity, and execution identity remain separate. No migration, cache, feature store, optimizer, broker, background worker, or persistent historical-run table is justified.
