@@ -1,9 +1,9 @@
-# AlphaDesk Phase 8 architecture
+# AlphaDesk Phase 9 architecture
 
 ## Request flow
 
 ```text
-React/Vite UI → typed API client → FastAPI routes → research/portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
+React/Vite UI → typed API client → FastAPI routes → historical research/composition/portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
                                       ↘ immutable registries / quality / calendar / adjustments
 ```
 
@@ -146,3 +146,27 @@ unchanged technical → scanner → strategy → backtest → portfolio → rese
 Current Nifty 200/500 CSVs must resolve exactly their expected member counts. A later snapshot closes previous open intervals on the day before the new snapshot while preserving earlier queries. It does not establish coverage before the first import. Corporate-action parsing promotes only unambiguous split/bonus rows with a real timezone-aware source publication timestamp; all missing timestamps are retained as issue evidence, not fabricated as `available_at`.
 
 Direct requests are serialized and bounded. HTTP 403 ends immediately; timeouts, 429, and 5xx receive limited retries. The importer retains untrusted files only in project-local ignored checksum-addressed storage and never serves raw bulk artifacts through HTTP. See [source audit](nse_data_sources.md) and [operator runbook](data_ingestion.md).
+
+## Phase 9 composition-aware historical flow
+
+```text
+inline Phase 7 request or saved experiment UUID
+                    ↓
+canonical Phase 7 composition + Phase 4 strategy resolution
+                    ↓
+historical PIT membership + calendar + batched price/action reads
+                    ↓
+one HistoricalTechnicalSeriesService union-feature computation
+                    ↓
+ordered per-session CONSENSUS_N_OF_M outcomes
+                    ↓ MATCHED only
+              canonical SetupEvents
+             ↙                     ↘
+Phase 5 TradeSimulator      Phase 6 PortfolioSimulator
+```
+
+`HistoricalCompositionService` owns source resolution, historical-range validation, point-in-time membership and data eligibility, shared component evaluation, and signal identity. It neither duplicates technical formulas nor calls the Phase 7 point endpoint once per date. Null component features retain the Phase 7 potentially-outcome-changing insufficient-history rule.
+
+`COMPOSITION_NEXT_OPEN_FIXED_HOLD` v1 maps a matched close to the immediate next valid RAW open and the configured fixed-hold RAW open. It delegates execution, missing-price skips, overlap, stops/targets, corporate-action handling, India cash-delivery costs, analytics, portfolio allocation, the cash ledger, and risk metrics to the existing Phase 5 and Phase 6 engines. Both APIs consume the exact same ordered setup stream.
+
+The source composition fingerprint, eligible dataset/signal fingerprint, and backtest/portfolio execution fingerprints are separate. Historical membership, calendar, price, action revision, source-artifact, ingestion-run, feature-version, and engine provenance are bound deterministically. Changing capital or holding assumptions does not relabel the underlying signal stream. Results remain synchronous and unpersisted; no schema change, cache, snapshot, feature store, queue, optimizer, or trading path was introduced. See [the Phase 9 composition backtesting specification](composition_backtesting.md).

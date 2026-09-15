@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -75,6 +75,18 @@ class ResearchInvariantError(RuntimeError):
 
 class ResearchPersistenceError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedCompositionConfiguration:
+    """Canonical Phase 7 composition definition shared by point and range evaluators."""
+
+    policy: CompositionPolicyDefinition
+    components: tuple[tuple[StrategyDefinition, dict[str, ParameterValue]], ...]
+    normalized_request: CompositionEvaluationRequest
+    union_feature_codes: tuple[str, ...]
+    feature_set: FeatureSetDefinition
+    config_fingerprint: str
 
 
 def _universe_metadata(index: MarketIndex) -> ScannerUniverseMetadata:
@@ -245,20 +257,22 @@ class ResearchService:
             },
         }
 
-    def evaluate(self, request: CompositionEvaluationRequest) -> CompositionEvaluationResponse:
-        started = time.perf_counter()
-        if request.as_of.tzinfo is None or request.as_of.utcoffset() is None:
-            raise ResearchValidationError("as_of must include a timezone offset")
-        if request.observation_date > request.as_of.astimezone(MARKET_TIMEZONE).date():
-            raise ResearchValidationError(
-                "observation_date cannot be after the evaluation as_of date"
-            )
-
+    def resolve_composition(
+        self,
+        request: CompositionEvaluationRequest,
+    ) -> ResolvedCompositionConfiguration:
+        """Apply the authoritative Phase 7 registry and normalization rules once."""
         policy = self._resolve_policy(request.policy_code, request.policy_version)
         components = self._resolve_components(request, policy)
         normalized_request = self._normalized_request(request, components)
         union_feature_codes = tuple(
-            sorted({code for definition, _ in components for code in definition.required_feature_codes})
+            sorted(
+                {
+                    code
+                    for definition, _ in components
+                    for code in definition.required_feature_codes
+                }
+            )
         )
         feature_set = _composition_feature_set(
             [definition for definition, _ in components], union_feature_codes
@@ -270,6 +284,31 @@ class ResearchService:
                 "normalized_request": normalized_request.model_dump(),
             }
         )
+        return ResolvedCompositionConfiguration(
+            policy=policy,
+            components=tuple(components),
+            normalized_request=normalized_request,
+            union_feature_codes=union_feature_codes,
+            feature_set=feature_set,
+            config_fingerprint=config_fingerprint,
+        )
+
+    def evaluate(self, request: CompositionEvaluationRequest) -> CompositionEvaluationResponse:
+        started = time.perf_counter()
+        if request.as_of.tzinfo is None or request.as_of.utcoffset() is None:
+            raise ResearchValidationError("as_of must include a timezone offset")
+        if request.observation_date > request.as_of.astimezone(MARKET_TIMEZONE).date():
+            raise ResearchValidationError(
+                "observation_date cannot be after the evaluation as_of date"
+            )
+
+        resolved = self.resolve_composition(request)
+        policy = resolved.policy
+        components = list(resolved.components)
+        normalized_request = resolved.normalized_request
+        union_feature_codes = resolved.union_feature_codes
+        feature_set = resolved.feature_set
+        config_fingerprint = resolved.config_fingerprint
 
         phase = time.perf_counter()
         market_index = self.indices.get_by_name_or_symbol(request.universe)
@@ -732,5 +771,6 @@ __all__ = [
     "ResearchPersistenceError",
     "ResearchService",
     "ResearchValidationError",
+    "ResolvedCompositionConfiguration",
     "policy_metadata",
 ]

@@ -13,6 +13,10 @@ from app.research import (
     ResearchValidationError,
 )
 from app.research.service import CompositionPolicyNotFoundError
+from app.research.historical import (
+    HistoricalCompositionService,
+    HistoricalResearchNotFoundError,
+)
 from app.schemas.research import (
     CompositionEvaluationRequest,
     CompositionEvaluationResponse,
@@ -24,6 +28,12 @@ from app.schemas.research import (
     ExperimentReplayResponse,
     ExperimentRunListResponse,
 )
+from app.schemas.research_history import (
+    CompositionBacktestRequest,
+    CompositionBacktestResponse,
+    CompositionPortfolioRequest,
+    CompositionPortfolioResponse,
+)
 from app.strategies import StrategyNotFoundError, StrategyValidationError
 
 router = APIRouter(prefix="/api/v1/research", tags=["multi-strategy-research"])
@@ -32,7 +42,12 @@ router = APIRouter(prefix="/api/v1/research", tags=["multi-strategy-research"])
 def _raise_domain_error(exc: Exception) -> NoReturn:
     if isinstance(
         exc,
-        (CompositionPolicyNotFoundError, ExperimentNotFoundError, StrategyNotFoundError),
+        (
+            CompositionPolicyNotFoundError,
+            ExperimentNotFoundError,
+            HistoricalResearchNotFoundError,
+            StrategyNotFoundError,
+        ),
     ):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, (ResearchValidationError, StrategyValidationError)):
@@ -58,6 +73,44 @@ def evaluate_composition(
         return ResearchService(db).evaluate(request)
     except (
         CompositionPolicyNotFoundError,
+        ResearchInvariantError,
+        ResearchValidationError,
+        StrategyNotFoundError,
+        StrategyValidationError,
+    ) as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/backtest", response_model=CompositionBacktestResponse)
+def backtest_composition(
+    request: CompositionBacktestRequest,
+    db: Session = Depends(get_db),
+) -> CompositionBacktestResponse:
+    try:
+        return HistoricalCompositionService(db).run_backtest(request)
+    except (
+        CompositionPolicyNotFoundError,
+        ExperimentNotFoundError,
+        HistoricalResearchNotFoundError,
+        ResearchInvariantError,
+        ResearchValidationError,
+        StrategyNotFoundError,
+        StrategyValidationError,
+    ) as exc:
+        _raise_domain_error(exc)
+
+
+@router.post("/portfolio", response_model=CompositionPortfolioResponse)
+def portfolio_composition(
+    request: CompositionPortfolioRequest,
+    db: Session = Depends(get_db),
+) -> CompositionPortfolioResponse:
+    try:
+        return HistoricalCompositionService(db).run_portfolio(request)
+    except (
+        CompositionPolicyNotFoundError,
+        ExperimentNotFoundError,
+        HistoricalResearchNotFoundError,
         ResearchInvariantError,
         ResearchValidationError,
         StrategyNotFoundError,

@@ -29,6 +29,9 @@ class PriceRecord:
     volume: int
     traded_value: Decimal | None
     source: str
+    data_origin: str = "UNKNOWN"
+    source_artifact_id: UUID | None = None
+    ingestion_run_id: UUID | None = None
 
 
 class SecurityRepository:
@@ -88,6 +91,9 @@ class SecurityRepository:
                 DailyPrice.volume,
                 DailyPrice.traded_value,
                 DailyPrice.source,
+                DailyPrice.data_origin,
+                DailyPrice.source_artifact_id,
+                DailyPrice.ingestion_run_id,
             )
             .where(DailyPrice.security_id.in_(security_ids), DailyPrice.trading_date <= end)
             .order_by(DailyPrice.security_id, DailyPrice.trading_date)

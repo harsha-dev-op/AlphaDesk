@@ -1109,3 +1109,193 @@ export interface PortfolioRunResponse {
   timings: { data_load_ms: number; technical_series_ms: number; setup_generation_ms: number; allocation_and_accounting_ms: number; risk_analytics_ms: number; response_build_ms: number; total_service_ms: number };
   executed_at: string;
 }
+
+export interface HistoricalCompositionSourceRequest {
+  inline_composition?: CompositionEvaluationRequest | null;
+  experiment_id?: string | null;
+}
+
+export interface HistoricalAnalysisRequest {
+  source: HistoricalCompositionSourceRequest;
+  universe: string;
+  start_date: string;
+  end_date: string;
+  adjustment_policy: 'RAW' | 'ADJUSTED';
+  execution_policy_code: 'COMPOSITION_NEXT_OPEN_FIXED_HOLD';
+  execution_policy_version: '1';
+  holding_sessions: number;
+  slippage_bps: string;
+  stop_loss_pct: string | null;
+  profit_target_pct: string | null;
+  max_exit_delay_sessions: number;
+  cost_model_code: 'INDIA_NSE_CASH_DELIVERY_2026_09';
+  cost_model_version: '1';
+  brokerage_per_order_inr: string;
+  brokerage_rate: string;
+  dp_charge_per_scrip_sell_day_inr: string;
+  out_of_sample_start_date: string | null;
+  diagnostic_detail_limit: number;
+}
+
+export interface CompositionBacktestRequest extends HistoricalAnalysisRequest {
+  trade_notional_inr: string;
+  trade_detail_limit: number;
+}
+
+export interface CompositionPortfolioRequest extends HistoricalAnalysisRequest {
+  portfolio_policy_code: 'LONG_ONLY_EQUAL_SLOT_PORTFOLIO';
+  portfolio_policy_version: '1';
+  initial_capital_inr: string;
+  max_concurrent_positions: number;
+  max_position_weight: string;
+  max_gross_exposure: string;
+  minimum_cash_reserve_pct: string;
+  risk_free_rate_annual: string;
+  position_detail_limit: number;
+  ledger_detail_limit: number;
+}
+
+export interface HistoricalCompositionSourceMetadata {
+  source_type: 'INLINE_COMPOSITION' | 'SAVED_EXPERIMENT';
+  experiment_id: string | null;
+  experiment_name: string | null;
+  experiment_description: string | null;
+  composition_config_fingerprint: string;
+  normalized_composition: CompositionEvaluationRequest;
+  composition_definition_fields: string[];
+  preserved_point_evaluation_fields: string[];
+  historical_run_fields: string[];
+}
+
+export interface CompositionExecutionPolicyMetadata {
+  policy_code: string;
+  policy_version: string;
+  display_name: string;
+  backtest_profile_code: string;
+  backtest_profile_version: string;
+  signal_timing: string;
+  entry_timing: string;
+  exit_timing: string;
+  direction: string;
+  overlap_policy: string;
+  default_holding_sessions: number;
+  minimum_holding_sessions: number;
+  maximum_holding_sessions: number;
+  policy_fingerprint: string;
+}
+
+export interface HistoricalCompositionOutcome {
+  security_id: string;
+  symbol: string;
+  observation_date: string;
+  status: CompositionStatus;
+  matched_strategy_count: number;
+  insufficient_strategy_count: number;
+  required_match_count: number;
+  composition_result_fingerprint: string;
+  components: Array<{
+    strategy_code: string;
+    strategy_version: string;
+    status: CompositionStatus;
+    result_fingerprint: string;
+  }>;
+}
+
+export interface HistoricalSignalDiagnostics {
+  eligible_evaluations: number;
+  matched_setups: number;
+  non_matches: number;
+  insufficient_history: number;
+  returned_outcomes: number;
+  outcomes_truncated: boolean;
+  outcome_order: 'DATE_SYMBOL_SECURITY_ASC';
+  outcomes: HistoricalCompositionOutcome[];
+}
+
+export interface HistoricalResearchTimings {
+  source_resolution_ms: number;
+  universe_and_calendar_ms: number;
+  data_load_ms: number;
+  feature_generation_ms: number;
+  composition_evaluation_ms: number;
+  signal_fingerprint_ms: number;
+  execution_ms: number;
+  analytics_ms: number;
+  response_build_ms: number;
+  total_service_ms: number;
+}
+
+export interface CompositionBacktestResponse {
+  normalized_request: CompositionBacktestRequest;
+  source: HistoricalCompositionSourceMetadata;
+  composition_policy: CompositionPolicyMetadata;
+  components: CompositionComponentConfiguration[];
+  execution_policy: CompositionExecutionPolicyMetadata;
+  profile: BacktestProfileMetadata;
+  cost_model: BacktestCostModelMetadata;
+  universe: ScannerUniverse;
+  dataset: BacktestRunResponse['dataset'];
+  historical_signal_fingerprint: string;
+  historical_dataset_fingerprint: string;
+  backtest_config_fingerprint: string;
+  backtest_run_fingerprint: string;
+  engine_provenance: Record<string, unknown>;
+  diagnostics: HistoricalSignalDiagnostics;
+  skipped_setup_count: number;
+  skipped_setup_reasons: Record<string, number>;
+  executed_trade_count: number;
+  analytics: BacktestAnalytics;
+  cost_analytics: BacktestRunResponse['cost_analytics'];
+  yearly_breakdown: BacktestPeriodBreakdown[];
+  holdout_breakdown: BacktestPeriodBreakdown[];
+  warnings: string[];
+  total_trade_count: number;
+  returned_trade_count: number;
+  trades_truncated: boolean;
+  trades: BacktestTrade[];
+  timings: HistoricalResearchTimings;
+  executed_at: string;
+  research_disclaimer: string;
+}
+
+export interface CompositionPortfolioResponse {
+  normalized_request: CompositionPortfolioRequest;
+  source: HistoricalCompositionSourceMetadata;
+  composition_policy: CompositionPolicyMetadata;
+  components: CompositionComponentConfiguration[];
+  execution_policy: CompositionExecutionPolicyMetadata;
+  profile: BacktestProfileMetadata;
+  cost_model: BacktestCostModelMetadata;
+  portfolio_policy: PortfolioPolicyMetadata;
+  universe: ScannerUniverse;
+  dataset: BacktestRunResponse['dataset'];
+  historical_signal_fingerprint: string;
+  historical_dataset_fingerprint: string;
+  portfolio_config_fingerprint: string;
+  portfolio_run_fingerprint: string;
+  engine_provenance: Record<string, unknown>;
+  diagnostics: HistoricalSignalDiagnostics;
+  accepted_entry_count: number;
+  rejected_candidate_count: number;
+  rejected_candidate_reasons: Record<string, number>;
+  closed_position_count: number;
+  metrics: PortfolioMetrics;
+  cost_analytics: BacktestRunResponse['cost_analytics'];
+  oos_metrics: PortfolioSegmentMetrics[];
+  warnings: string[];
+  daily_equity_curve: DailyPortfolioSnapshot[];
+  total_position_count: number;
+  returned_position_count: number;
+  positions_truncated: boolean;
+  positions: PortfolioPosition[];
+  total_ledger_event_count: number;
+  returned_ledger_event_count: number;
+  ledger_truncated: boolean;
+  ledger_events: PortfolioCashLedgerEvent[];
+  returned_rejected_candidate_count: number;
+  rejected_candidates_truncated: boolean;
+  rejected_candidates: PortfolioRejectedCandidate[];
+  timings: HistoricalResearchTimings;
+  executed_at: string;
+  research_disclaimer: string;
+}

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Beaker, Check, Database, FileClock, Fingerprint, Layers3, Play, RefreshCw, Save, ShieldCheck, Users, X } from 'lucide-react';
+import { Beaker, CalendarRange, Check, Database, FileClock, Fingerprint, Layers3, Play, RefreshCw, Save, ShieldCheck, Users, X } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,12 +16,13 @@ import { Surface, SurfaceHeader } from '@/src/components/ui/Surface';
 import { NoResults, RequestError } from '@/src/components/RequestState';
 import { StatusBadge } from '@/src/components/StatusBadge';
 import { TerminalShell } from '@/src/components/TerminalShell';
+import { HistoricalResearchPanel } from '@/src/components/HistoricalResearchPanel';
 import { useApi } from '@/src/hooks/useApi';
 import { formatDate, formatDateTime, formatInteger } from '@/src/lib/format';
 import { api } from '@/src/services/api';
 import type { CompositionComponentRequest, CompositionEvaluationRequest, CompositionEvaluationResponse, CompositionStatus, ExperimentDefinition, ExperimentListItem, ExperimentRunListResponse, StrategyMetadata, StrategyParameterMetadata, StrategyScalar } from '@/src/types/api';
 
-type WorkspaceView = 'composition' | 'experiments';
+type WorkspaceView = 'composition' | 'experiments' | 'historical';
 
 const strategyKey = (strategy: Pick<StrategyMetadata, 'strategy_code' | 'strategy_version'>) => `${strategy.strategy_code}:v${strategy.strategy_version}`;
 const defaultsFor = (strategy: StrategyMetadata) => Object.fromEntries(strategy.parameters.map((parameter) => [parameter.code, parameter.default_value]));
@@ -67,6 +68,7 @@ export function ResearchWorkspace() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [replaying, setReplaying] = useState(false);
   const [replayError, setReplayError] = useState<string | null>(null);
+  const [historicalExperimentId, setHistoricalExperimentId] = useState<string | null>(null);
 
   const strategiesByKey = useMemo(
     () => new Map(metadata.data?.strategies.map((strategy) => [strategyKey(strategy), strategy]) ?? []),
@@ -108,7 +110,13 @@ export function ResearchWorkspace() {
 
   const changeView = (nextView: WorkspaceView) => {
     setView(nextView);
-    if (nextView === 'experiments') void loadExperiments();
+    if (nextView === 'experiments' || nextView === 'historical') void loadExperiments();
+  };
+
+  const launchHistorical = (experimentId: string) => {
+    setHistoricalExperimentId(experimentId);
+    setView('historical');
+    void loadExperiments();
   };
 
   const openExperiment = async (id: string) => {
@@ -265,14 +273,14 @@ export function ResearchWorkspace() {
     <PageHeader
       eyebrow="Multi-strategy provenance"
       title="Research composition"
-      description="Evaluate multiple immutable strategy definitions under one point-in-time clock, then explicitly preserve exact configurations as replayable experiments."
-      meta={<span className="inline-flex items-center gap-2 border border-primary/25 bg-primary/[0.055] px-2.5 py-1.5 text-xs font-medium text-primary"><Layers3 className="size-3.5" />Phase 7 · research only</span>}
+      description="Compose immutable strategy definitions, preserve them as experiments, and replay the same N-of-M semantics through historical trade and portfolio research."
+      meta={<span className="inline-flex items-center gap-2 border border-primary/25 bg-primary/[0.055] px-2.5 py-1.5 text-xs font-medium text-primary"><Layers3 className="size-3.5" />Phase 7–9 · research only</span>}
     />
 
-    <Alert className="mb-4 rounded-none border-warning/25 bg-warning/[0.045] text-warning"><ShieldCheck /><AlertTitle>Composition is not a recommendation</AlertTitle><AlertDescription>No ranking, predictive score, automatic selection, allocation, or order execution is produced here.</AlertDescription></Alert>
+    <Alert className="mb-4 rounded-none border-warning/25 bg-warning/[0.045] text-warning"><ShieldCheck /><AlertTitle>Composition research is not a recommendation</AlertTitle><AlertDescription>No ranking, prediction, live signal, broker order, or real-money execution is produced here. Historical results are simulations.</AlertDescription></Alert>
 
     <div className="mb-4 flex border border-border/90 bg-surface p-1" role="tablist" aria-label="Research workspace views">
-      {(['composition', 'experiments'] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => changeView(item)} className={`focus-terminal min-h-9 flex-1 px-4 text-xs font-semibold uppercase tracking-[0.09em] sm:flex-none ${view === item ? 'bg-primary/12 text-primary' : 'text-muted-foreground hover:bg-surface-inset hover:text-foreground'}`}>{item === 'composition' ? 'Composition' : `Experiments${experimentTotal ? ` · ${experimentTotal}` : ''}`}</button>)}
+      {(['composition', 'experiments', 'historical'] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => changeView(item)} className={`focus-terminal min-h-9 min-w-0 flex-1 px-2 text-xs font-semibold uppercase tracking-[0.09em] sm:flex-none sm:px-4 ${view === item ? 'bg-primary/12 text-primary' : 'text-muted-foreground hover:bg-surface-inset hover:text-foreground'}`}>{item === 'composition' ? 'Composition' : item === 'historical' ? 'Historical analysis' : `Experiments${experimentTotal ? ` · ${experimentTotal}` : ''}`}</button>)}
     </div>
 
     {metadata.error ? <RequestError message={metadata.error} retry={metadata.retry} /> : view === 'composition' ? <>
@@ -350,7 +358,7 @@ export function ResearchWorkspace() {
       </>}
 
       {!evaluation && !running && <Surface className="mt-4 border-dashed"><div className="grid min-h-44 place-items-center p-6 text-center"><div><span className="mx-auto grid size-10 place-items-center border border-primary/25 bg-primary/[0.065] text-primary"><Beaker className="size-4" /></span><h2 className="mt-3 text-sm font-semibold">Compose immutable research definitions</h2><p className="mt-1.5 max-w-xl text-sm leading-6 text-muted-foreground">Choose at least two strategy versions and a consensus threshold. Results preserve missing-history ambiguity and never rank securities.</p></div></div></Surface>}
-    </> : <>
+    </> : view === 'historical' ? metadata.data ? <HistoricalResearchPanel metadata={metadata.data} inlineComposition={evaluation?.normalized_request ?? null} experiments={experiments} initialExperimentId={historicalExperimentId} /> : <Surface><SurfaceHeader title="Loading historical research metadata" /><div className="space-y-2 p-4">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} className="h-10 rounded-none" />)}</div></Surface> : <>
       {experimentsError && <RequestError message={experimentsError} retry={() => void loadExperiments()} compact />}
       <div className="grid gap-4 xl:grid-cols-[.42fr_1fr]">
         <Surface>
@@ -362,7 +370,7 @@ export function ResearchWorkspace() {
         <div className="min-w-0">
           {detailLoading ? <Surface><SurfaceHeader title="Loading experiment" /><div className="space-y-2 p-4">{Array.from({ length: 7 }, (_, index) => <Skeleton key={index} className="h-10 rounded-none" />)}</div></Surface> : detail ? <div className="grid gap-4">
             <Surface>
-              <SurfaceHeader eyebrow="Immutable definition" title={detail.name} description={detail.description ?? 'No description was saved.'} action={<Button onClick={replayExperiment} disabled={replaying} className="rounded-none"><RefreshCw className={replaying ? 'animate-spin' : ''} />{replaying ? 'Replaying…' : 'Replay experiment'}</Button>} />
+              <SurfaceHeader eyebrow="Immutable definition" title={detail.name} description={detail.description ?? 'No description was saved.'} action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => launchHistorical(detail.id)} className="rounded-none"><CalendarRange />Historical analysis</Button><Button onClick={replayExperiment} disabled={replaying} className="rounded-none"><RefreshCw className={replaying ? 'animate-spin' : ''} />{replaying ? 'Replaying…' : 'Replay experiment'}</Button></div>} />
               {replayError && <div className="p-4 pb-0"><Alert variant="destructive" className="rounded-none"><X /><AlertTitle>Replay could not complete</AlertTitle><AlertDescription>{replayError}</AlertDescription></Alert></div>}
               <div className="grid gap-px border-t border-border/80 bg-border/70 sm:grid-cols-2 xl:grid-cols-4"><div className="bg-surface p-3"><p className="text-[0.625rem] uppercase tracking-[0.08em] text-muted-foreground">Policy</p><p className="numeric mt-1 text-xs font-semibold">{detail.policy_code} · v{detail.policy_version}</p></div><div className="bg-surface p-3"><p className="text-[0.625rem] uppercase tracking-[0.08em] text-muted-foreground">Consensus</p><p className="numeric mt-1 text-xs font-semibold">{detail.normalized_request.required_match_count} of {detail.normalized_request.components.length}</p></div><div className="bg-surface p-3"><p className="text-[0.625rem] uppercase tracking-[0.08em] text-muted-foreground">Universe / date</p><p className="numeric mt-1 text-xs font-semibold">{detail.normalized_request.universe} · {formatDate(detail.normalized_request.observation_date)}</p></div><div className="bg-surface p-3"><p className="text-[0.625rem] uppercase tracking-[0.08em] text-muted-foreground">Price policy</p><p className="numeric mt-1 text-xs font-semibold">{detail.normalized_request.adjustment_policy}</p></div></div>
               <div className="border-t border-border/80 p-4"><h3 className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">Normalized strategy components</h3><div className="mt-3 grid gap-2 lg:grid-cols-3">{detail.normalized_request.components.map((component) => <div key={`${component.strategy_code}:${component.strategy_version}`} className="border border-border bg-surface-inset/45 p-3"><p className="numeric text-xs font-semibold">{component.strategy_code} · v{component.strategy_version}</p><dl className="mt-2 grid gap-1">{Object.entries(component.parameter_overrides).map(([code, value]) => <div key={code} className="flex justify-between gap-3 text-[0.625rem]"><dt className="numeric text-muted-foreground">{code}</dt><dd className="numeric">{String(value)}</dd></div>)}</dl></div>)}</div></div>
