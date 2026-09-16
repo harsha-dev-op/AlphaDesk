@@ -1,9 +1,9 @@
-# AlphaDesk Phase 10 architecture
+# AlphaDesk Phase 11 architecture
 
 ## Request flow
 
 ```text
-React/Vite UI → typed API client → FastAPI routes → historical research/composition/portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
+React/Vite UI → typed API client → FastAPI routes → regime/historical research/composition/portfolio/backtest/strategy/scanner/technical services → repositories → SQLAlchemy → PostgreSQL
                                       ↘ immutable registries / quality / calendar / adjustments
 ```
 
@@ -176,3 +176,27 @@ The source composition fingerprint, eligible dataset/signal fingerprint, and bac
 Phase 10 preserves the flow above and removes measured request-local duplication. Immutable strategy evaluation plans resolve feature dependencies, operators, and thresholds once; the range calculator skips unrequested family outputs while retaining the same authoritative formulas; and exact canonical strategy-result bytes avoid recursive generic object normalization in the inner loop. An explicit `PreparedHistoricalComposition` may feed both execution adapters in one internal workflow. Public endpoints remain independent, and compatibility validation prevents a context from being reused with a different source, range, adjustment policy, execution policy, or holding period.
 
 This is not a global cache: the context is caller-owned, immutable at its record boundary, unpersisted, and contains one price/feature graph. Query batching remains 50 securities with 6/12/24 statements at 50/200/500 members. See [the Phase 10 performance report](phase10_performance.md) for profile evidence, exact parity coverage, memory considerations, and before/after measurements.
+
+## Phase 11 point-in-time market-regime flow
+
+```text
+dedicated benchmark index prices (DEMO or OFFICIAL)
+                    ↓ availability/source gate
+authoritative SMA_50 / SMA_200 / MOM_3M_63D / VOLATILITY_20
+                    ↓
+prior-only 252-value nearest-rank volatility window
+                    ↓
+MARKET_REGIME_4_STATE v1 chronological timeline
+             ↙                          ↘
+transitions / duration / distribution    Phase 10 prepared composition
+                                                   ↓
+                                      unchanged Phase 5 trades
+                                                   ↓
+                                      signal-date regime attribution
+```
+
+`IndexDailyPrice` is a dedicated index-level entity; a benchmark is never stored as a fake equity. `(index_id, trading_date, source_mode)` is idempotent, source mode is explicit, and every row carries a point-in-time `available_at` plus optional Phase 8 artifact/run lineage. DEMO and OFFICIAL histories never silently substitute for each other.
+
+The regime service calls the authoritative selected-feature calculator once over one ordered benchmark prefix. For each session, the current `VOLATILITY_20` is compared with the nearest-rank 80th percentile of at most 252 prior valid observations; the current observation enters the window only after classification. Fewer than 126 prior values or any missing trend input yields `INSUFFICIENT_HISTORY`. Classification precedence is high volatility, strict bull, strict bear, then sideways.
+
+Regime attribution prepares the Phase 9/10 composition stream once and calls the existing Phase 5 simulator once. Every setup and trade is joined to the regime on `signal_date`, never entry date. The overlay cannot filter signals, alter execution, or change allocation. Trade counts and trade-level net P&L must reconcile before a response is returned. Existing Phase 5–10 fingerprints are untouched; timeline and attribution receive separate additive fingerprints. See [the Phase 11 market-regime specification](market_regime.md).

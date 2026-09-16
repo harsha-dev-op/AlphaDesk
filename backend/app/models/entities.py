@@ -165,6 +165,74 @@ class MarketIndex(TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     exchange: Mapped[str] = mapped_column(String(16), nullable=False)
     memberships: Mapped[list[IndexMembership]] = relationship(back_populates="index", cascade="all, delete-orphan")
+    prices: Mapped[list[IndexDailyPrice]] = relationship(
+        back_populates="index", cascade="all, delete-orphan"
+    )
+
+
+class IndexDailyPrice(Base):
+    """Point-in-time benchmark levels; indices are never represented as equities."""
+
+    __tablename__ = "index_daily_prices"
+    __table_args__ = (
+        UniqueConstraint(
+            "index_id",
+            "trading_date",
+            "source_mode",
+            name="uq_index_daily_prices_index_date_source",
+        ),
+        CheckConstraint(
+            "source_mode IN ('DEMO', 'OFFICIAL')",
+            name="valid_index_price_source_mode",
+        ),
+        CheckConstraint(
+            "open > 0 AND high > 0 AND low > 0 AND close > 0",
+            name="nonnegative_index_prices",
+        ),
+        CheckConstraint("high >= low", name="index_price_high_gte_low"),
+        CheckConstraint(
+            "open >= low AND open <= high", name="index_price_open_within_range"
+        ),
+        CheckConstraint(
+            "close >= low AND close <= high", name="index_price_close_within_range"
+        ),
+        Index(
+            "ix_index_daily_prices_index_source_date",
+            "index_id",
+            "source_mode",
+            "trading_date",
+        ),
+        Index(
+            "ix_index_daily_prices_available_at",
+            "index_id",
+            "source_mode",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    index_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("indices.id", ondelete="CASCADE"), nullable=False
+    )
+    trading_date: Mapped[date] = mapped_column(Date, nullable=False)
+    open: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    high: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    low: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    close: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    source_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_artifacts.id", ondelete="RESTRICT")
+    )
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    index: Mapped[MarketIndex] = relationship(back_populates="prices")
 
 
 class IndexMembership(Base):

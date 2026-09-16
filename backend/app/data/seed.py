@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.data.providers import DemoMarketDataProvider
 from app.database.session import SessionLocal
-from app.models import CorporateAction, DailyPrice, DataIngestionRun, FundamentalReport, IndexMembership, MarketIndex, Security, StrategyDefinition, TradingCalendar
+from app.models import CorporateAction, DailyPrice, DataIngestionRun, FundamentalReport, IndexDailyPrice, IndexMembership, MarketIndex, Security, StrategyDefinition, TradingCalendar
 
 logger = structlog.get_logger(__name__)
 
@@ -15,7 +15,21 @@ logger = structlog.get_logger(__name__)
 def seed_demo(session: Session) -> dict[str, int]:
     provider = DemoMarketDataProvider()
     if session.scalar(select(Security.id).where(Security.symbol == "ALPHAIND")):
-        return {"securities": 0, "prices": 0, "message": "demo data already present"}
+        market_index = session.scalar(
+            select(MarketIndex).where(MarketIndex.symbol == "NIFTYDEMO100")
+        )
+        index_price_count = (
+            _seed_index_prices(session, provider, market_index)
+            if market_index is not None
+            else 0
+        )
+        session.commit()
+        return {
+            "securities": 0,
+            "prices": 0,
+            "index_prices": index_price_count,
+            "message": "demo data already present",
+        }
 
     logger.info("ingestion_started", provider=provider.code, dataset="phase1_demo")
     run = DataIngestionRun(dataset_code="phase1_demo", dataset_version="2025.03.v1", provider=provider.code, status="RUNNING")
@@ -32,6 +46,7 @@ def seed_demo(session: Session) -> dict[str, int]:
     market_index = MarketIndex(name="NIFTY Demo 100", symbol="NIFTYDEMO100", provider=provider.code, exchange="NSE")
     session.add(market_index)
     session.flush()
+    index_price_count = _seed_index_prices(session, provider, market_index, run.id)
 
     for payload in provider.get_daily_prices(date(2025, 1, 2), date(2025, 3, 31)):
         symbol = payload.pop("symbol")
@@ -58,10 +73,45 @@ def seed_demo(session: Session) -> dict[str, int]:
     price_count = len(provider.get_daily_prices(date(2025, 1, 2), date(2025, 3, 31)))
     run.status = "SUCCESS"
     run.completed_at = datetime.now(UTC)
-    run.records_written = len(securities) + price_count
+    run.records_written = len(securities) + price_count + index_price_count
     session.commit()
     logger.info("ingestion_completed", provider=provider.code, records=run.records_written)
-    return {"securities": len(securities), "prices": price_count}
+    return {
+        "securities": len(securities),
+        "prices": price_count,
+        "index_prices": index_price_count,
+    }
+
+
+def _seed_index_prices(
+    session: Session,
+    provider: DemoMarketDataProvider,
+    market_index: MarketIndex,
+    ingestion_run_id=None,
+) -> int:
+    existing = set(
+        session.scalars(
+            select(IndexDailyPrice.trading_date).where(
+                IndexDailyPrice.index_id == market_index.id,
+                IndexDailyPrice.source_mode == "DEMO",
+            )
+        )
+    )
+    inserted = 0
+    for raw_payload in provider.get_index_daily_prices():
+        payload = dict(raw_payload)
+        payload.pop("index_symbol")
+        if payload["trading_date"] in existing:
+            continue
+        session.add(
+            IndexDailyPrice(
+                index_id=market_index.id,
+                ingestion_run_id=ingestion_run_id,
+                **payload,
+            )
+        )
+        inserted += 1
+    return inserted
 
 
 def main() -> None:

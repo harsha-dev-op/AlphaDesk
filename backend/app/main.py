@@ -12,6 +12,7 @@ from app.api.routes import (
     indices,
     portfolio,
     quality,
+    regimes,
     research,
     scanner,
     securities,
@@ -43,5 +44,6 @@ app.include_router(strategies.router)
 app.include_router(backtests.router)
 app.include_router(portfolio.router)
 app.include_router(research.router)
+app.include_router(regimes.router)
 app.include_router(indices.router)
 app.include_router(quality.router)

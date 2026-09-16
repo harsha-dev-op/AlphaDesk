@@ -28,6 +28,9 @@ class MarketDataProvider(ABC):
     def get_index_membership(self) -> list[dict]: ...
 
     @abstractmethod
+    def get_index_daily_prices(self) -> list[dict]: ...
+
+    @abstractmethod
     def get_fundamentals(self) -> list[dict]: ...
 
 
@@ -81,6 +84,52 @@ class DemoMarketDataProvider(MarketDataProvider):
             {"index_symbol": "NIFTYDEMO100", "symbol": "GAMMAFIN", "valid_from": date(2025, 2, 15), "valid_to": None, "source": self.code, "data_origin": "DEMO"},
             {"index_symbol": "NIFTYDEMO100", "symbol": "OLDCO", "valid_from": date(2025, 1, 1), "valid_to": date(2025, 2, 14), "source": self.code, "data_origin": "DEMO"},
         ]
+
+    def get_index_daily_prices(self) -> list[dict]:
+        """Generate fictional benchmark levels with derived four-regime coverage."""
+        rows: list[dict] = []
+        current = date(2021, 1, 4)
+        previous_close = Decimal("1000")
+        session_index = 0
+        while session_index < 1300:
+            if current.weekday() >= 5:
+                current += timedelta(days=1)
+                continue
+            if session_index < 320:
+                factor = Decimal("1.0015")
+            elif session_index < 500:
+                factor = Decimal("1.035") if session_index % 2 == 0 else Decimal("0.967")
+            elif session_index < 800:
+                factor = Decimal("0.9970")
+            elif session_index < 1050:
+                cycle = (Decimal("1.002"), Decimal("0.998"), Decimal("1.001"), Decimal("0.999"))
+                factor = cycle[session_index % len(cycle)]
+            else:
+                factor = Decimal("1.0012")
+            close = (previous_close * factor).quantize(Decimal("0.000001"))
+            open_ = previous_close
+            range_factor = Decimal("0.010") if 320 <= session_index < 500 else Decimal("0.003")
+            high = (max(open_, close) * (Decimal(1) + range_factor)).quantize(Decimal("0.000001"))
+            low = (min(open_, close) * (Decimal(1) - range_factor)).quantize(Decimal("0.000001"))
+            rows.append(
+                {
+                    "index_symbol": "NIFTYDEMO100",
+                    "trading_date": current,
+                    "open": open_,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "source_mode": "DEMO",
+                    "source": self.code,
+                    "available_at": datetime.combine(
+                        current, time(15, 30), tzinfo=DEMO_MARKET_TIMEZONE
+                    ),
+                }
+            )
+            previous_close = close
+            session_index += 1
+            current += timedelta(days=1)
+        return rows
 
     def get_fundamentals(self) -> list[dict]:
         periods = [

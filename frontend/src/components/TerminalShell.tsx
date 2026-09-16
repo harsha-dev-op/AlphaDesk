@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { Activity, BarChart3, Bot, BriefcaseBusiness, ChartCandlestick, Database, FileSearch, FlaskConical, Layers3, LayoutDashboard, LockKeyhole, Newspaper, Search, Settings, ShieldCheck } from 'lucide-react';
+import { Activity, BarChart3, Bot, BriefcaseBusiness, ChartCandlestick, Database, FileSearch, FlaskConical, Gauge, Layers3, LayoutDashboard, LockKeyhole, Newspaper, Search, Settings, ShieldCheck } from 'lucide-react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarSeparator, SidebarTrigger } from '@/components/ui/sidebar';
 import { GlobalSecuritySearch } from '@/src/components/GlobalSecuritySearch';
@@ -13,7 +13,7 @@ import { api } from '@/src/services/api';
 
 const groups = [
   { label: 'Workspace', items: [{ href: '/', label: 'Dashboard', icon: LayoutDashboard }] },
-  { label: 'Market', items: [{ href: '', label: 'Markets', icon: ChartCandlestick, future: true }, { href: '/scanner', label: 'Scanner', icon: Search }, { href: '/securities', label: 'Securities', icon: BarChart3 }, { href: '', label: 'News & events', icon: Newspaper, future: true }] },
+  { label: 'Market', items: [{ href: '', label: 'Markets', icon: ChartCandlestick, future: true }, { href: '/scanner', label: 'Scanner', icon: Search }, { href: '/securities', label: 'Securities', icon: BarChart3 }, { href: '/regimes', label: 'Market regime', icon: Gauge }, { href: '', label: 'News & events', icon: Newspaper, future: true }] },
   { label: 'Research', items: [{ href: '/research', label: 'Research', icon: Layers3 }, { href: '/strategies', label: 'Strategies', icon: FlaskConical }, { href: '/backtests', label: 'Backtests', icon: FileSearch }, { href: '/portfolio', label: 'Portfolio', icon: BriefcaseBusiness }] },
   { label: 'Intelligence', items: [{ href: '', label: 'AI copilot', icon: Bot, future: true }] },
   { label: 'System', items: [{ href: '/data-health', label: 'Data health', icon: ShieldCheck }, { href: '', label: 'Settings', icon: Settings, future: true }] },

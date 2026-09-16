@@ -135,6 +135,14 @@ class PreparedHistoricalComposition:
     signal_fingerprint_ms: float
 
 
+@dataclass(frozen=True, slots=True)
+class HistoricalBacktestExecution:
+    """Internal full-fidelity execution result for research overlays."""
+
+    response: CompositionBacktestResponse
+    trades: tuple[SimulatedTrade, ...]
+
+
 def _membership_active(membership: IndexMembership, day: date) -> bool:
     return membership.valid_from <= day and (
         membership.valid_to is None or membership.valid_to >= day
@@ -807,7 +815,9 @@ class HistoricalCompositionService:
     ) -> CompositionBacktestResponse:
         started = time.perf_counter()
         prepared = self.prepare(request)
-        return self._run_backtest_prepared(request, prepared, started=started)
+        return self._execute_backtest_prepared(
+            request, prepared, started=started
+        ).response
 
     def run_backtest_prepared(
         self,
@@ -816,19 +826,32 @@ class HistoricalCompositionService:
     ) -> CompositionBacktestResponse:
         """Run Phase 5 from an explicit request-scoped historical signal context."""
         self._assert_prepared_compatible(request, prepared)
-        return self._run_backtest_prepared(
+        return self._execute_backtest_prepared(
+            request,
+            prepared,
+            started=time.perf_counter(),
+        ).response
+
+    def execute_backtest_prepared(
+        self,
+        request: CompositionBacktestRequest,
+        prepared: PreparedHistoricalComposition,
+    ) -> HistoricalBacktestExecution:
+        """Execute once and retain every trade for deterministic analytics overlays."""
+        self._assert_prepared_compatible(request, prepared)
+        return self._execute_backtest_prepared(
             request,
             prepared,
             started=time.perf_counter(),
         )
 
-    def _run_backtest_prepared(
+    def _execute_backtest_prepared(
         self,
         request: CompositionBacktestRequest,
         prepared: PreparedHistoricalComposition,
         *,
         started: float,
-    ) -> CompositionBacktestResponse:
+    ) -> HistoricalBacktestExecution:
         normalized_request = CompositionBacktestRequest.model_validate(
             self._normalized_execution_request(request, prepared).model_dump()
         )
@@ -1030,7 +1053,7 @@ class HistoricalCompositionService:
         response.timings.total_service_ms = round(
             (time.perf_counter() - started) * 1_000, 3
         )
-        return response
+        return HistoricalBacktestExecution(response=response, trades=tuple(trades))
 
     def run_portfolio(
         self,

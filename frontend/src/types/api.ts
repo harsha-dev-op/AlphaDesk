@@ -1299,3 +1299,173 @@ export interface CompositionPortfolioResponse {
   executed_at: string;
   research_disclaimer: string;
 }
+
+export type RegimeSourceMode = 'DEMO' | 'OFFICIAL';
+export type RegimeClassification = 'TRENDING_BULL' | 'TRENDING_BEAR' | 'SIDEWAYS' | 'HIGH_VOLATILITY' | 'INSUFFICIENT_HISTORY';
+
+export interface BenchmarkCoverage {
+  benchmark_id: string;
+  benchmark_symbol: string;
+  benchmark_name: string;
+  benchmark_provider: string;
+  source_mode: RegimeSourceMode;
+  first_available_date: string | null;
+  last_available_date: string | null;
+  session_count: number;
+  enough_history_for_regime: boolean;
+  first_classifiable_date: string | null;
+}
+
+export interface RegimeBenchmark {
+  id: string;
+  symbol: string;
+  name: string;
+  provider: string;
+  exchange: string;
+  coverage: BenchmarkCoverage[];
+}
+
+export interface RegimeDefinitionMetadata {
+  code: string;
+  version: string;
+  display_name: string;
+  description: string;
+  regimes: Exclude<RegimeClassification, 'INSUFFICIENT_HISTORY'>[];
+  required_feature_codes: string[];
+  volatility_percentile_window: number;
+  volatility_percentile: string;
+  minimum_prior_volatility_observations: number;
+  percentile_rule: string;
+  classification_precedence: RegimeClassification[];
+  rule_explanation: string;
+}
+
+export interface RegimeMetadataResponse {
+  definitions: RegimeDefinitionMetadata[];
+  benchmarks: RegimeBenchmark[];
+  default_benchmark: string;
+  supported_source_modes: RegimeSourceMode[];
+  research_disclaimer: string;
+}
+
+export interface RegimeHistoryRequest {
+  benchmark: string;
+  start_date: string;
+  end_date: string;
+  source_mode: RegimeSourceMode;
+  regime_definition_code?: string;
+  regime_definition_version?: string;
+  as_of?: string | null;
+}
+
+export interface RegimeEvaluation {
+  observation_date: string;
+  available_at: string;
+  status: 'CLASSIFIED' | 'INSUFFICIENT_HISTORY';
+  classification: RegimeClassification;
+  regime: Exclude<RegimeClassification, 'INSUFFICIENT_HISTORY'> | null;
+  close: string;
+  sma_50: string | null;
+  sma_200: string | null;
+  momentum_3m_63d: string | null;
+  volatility_20: string | null;
+  historical_volatility_threshold: string | null;
+  prior_valid_volatility_count: number;
+  high_volatility_triggered: boolean;
+  bull_conditions_met: boolean;
+  bear_conditions_met: boolean;
+  reasons: string[];
+  evaluation_fingerprint: string;
+}
+
+export interface RegimeDistribution {
+  classification: RegimeClassification;
+  session_count: number;
+  percentage_of_classified_sessions: string | null;
+}
+
+export interface RegimeTransition {
+  transition_date: string;
+  previous_classification: RegimeClassification;
+  new_classification: RegimeClassification;
+  previous_regime_duration_sessions: number;
+  benchmark_symbol: string;
+}
+
+export interface RegimeHistoryResponse {
+  availability: 'AVAILABLE' | 'UNAVAILABLE';
+  normalized_request: Required<RegimeHistoryRequest>;
+  benchmark: RegimeBenchmark;
+  definition: RegimeDefinitionMetadata;
+  coverage: BenchmarkCoverage;
+  classifications: RegimeEvaluation[];
+  distributions: RegimeDistribution[];
+  insufficient_history_sessions: number;
+  latest_classification: RegimeEvaluation | null;
+  latest_regime_start_date: string | null;
+  latest_regime_duration_sessions: number;
+  transitions: RegimeTransition[];
+  regime_timeline_fingerprint: string;
+  benchmark_dataset_fingerprint: string;
+  timings: {
+    repository_load_ms: number;
+    feature_generation_ms: number;
+    classification_ms: number;
+    response_build_ms: number;
+    total_service_ms: number;
+  };
+  warnings: string[];
+  research_disclaimer: string;
+}
+
+export interface RegimeResearchAttributionRequest {
+  backtest: CompositionBacktestRequest;
+  benchmark: string;
+  source_mode: RegimeSourceMode;
+  regime_definition_code?: string;
+  regime_definition_version?: string;
+  as_of?: string | null;
+}
+
+export interface RegimeAttributionMetrics {
+  classification: RegimeClassification | 'OVERALL';
+  signal_count: number;
+  executed_trade_count: number;
+  skipped_setup_count: number;
+  winning_trade_count: number;
+  losing_trade_count: number;
+  breakeven_trade_count: number;
+  win_rate: string | null;
+  gross_profit: string;
+  gross_loss: string;
+  net_pnl: string;
+  mean_net_return_pct: string | null;
+  median_net_return_pct: string | null;
+  average_holding_sessions: string | null;
+  profit_factor: string | null;
+  expectancy: string | null;
+  average_win: string | null;
+  average_loss: string | null;
+}
+
+export interface RegimeResearchAttributionResponse {
+  normalized_request: RegimeResearchAttributionRequest;
+  backtest: CompositionBacktestResponse;
+  regime_history: RegimeHistoryResponse;
+  overall: RegimeAttributionMetrics;
+  buckets: RegimeAttributionMetrics[];
+  attributed_trade_count: number;
+  trade_count_reconciled: boolean;
+  attributed_net_pnl: string;
+  net_pnl_reconciled: boolean;
+  regime_attribution_fingerprint: string;
+  timings: {
+    historical_preparation_ms: number;
+    backtest_execution_ms: number;
+    regime_timeline_ms: number;
+    attribution_ms: number;
+    total_service_ms: number;
+  };
+  warnings: string[];
+  research_disclaimer: string;
+}

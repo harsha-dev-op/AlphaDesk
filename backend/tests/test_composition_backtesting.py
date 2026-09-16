@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from collections import Counter
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -14,6 +16,7 @@ from app.models import (
     CorporateAction,
     DailyPrice,
     DataIngestionRun,
+    IndexDailyPrice,
     IndexMembership,
     MarketIndex,
     ResearchExperiment,
@@ -22,6 +25,9 @@ from app.models import (
     TradingCalendar,
 )
 from app.research.historical import HistoricalCompositionService
+from app.regimes.schemas import RegimeResearchAttributionRequest
+from app.regimes.service import MarketRegimeService
+from app.regimes.definitions import MARKET_REGIME_4_STATE_V1, REGIME_DEFINITIONS
 from app.research.service import ResearchService
 from app.schemas.research import CompositionEvaluationRequest, ExperimentCreateRequest
 from app.schemas.research_history import (
@@ -217,6 +223,29 @@ def portfolio_request(sessions, **overrides) -> CompositionPortfolioRequest:
     return CompositionPortfolioRequest(**payload)
 
 
+def seed_regime_benchmark(db, sessions, universe):
+    for session_index, day in enumerate(sessions):
+        close = Decimal("1000") + Decimal(session_index) * Decimal("1.50")
+        db.add(
+            IndexDailyPrice(
+                id=uuid.uuid5(
+                    PHASE9_GOLDEN_NAMESPACE,
+                    f"regime-price:{universe.id}:{day}",
+                ),
+                index_id=universe.id,
+                trading_date=day,
+                open=close - Decimal("0.50"),
+                high=close + Decimal("2"),
+                low=close - Decimal("2"),
+                close=close,
+                source_mode="DEMO",
+                source="PHASE11_TEST",
+                available_at=datetime.combine(day, time(15, 30), tzinfo=IST),
+            )
+        )
+    db.commit()
+
+
 def test_phase9_golden_outputs_are_byte_stable_before_performance_changes(db):
     """Freeze representative Phase 9 identities and research outputs for Phase 10."""
     sessions, _, _ = seed_history(db)
@@ -303,6 +332,201 @@ def test_shared_prepared_context_preserves_complete_backtest_and_portfolio_outpu
     assert shared_backtest.historical_signal_fingerprint == (
         shared_portfolio.historical_signal_fingerprint
     )
+
+
+def test_regime_attribution_reuses_signal_date_and_reconciles_authoritative_trades(db):
+    sessions, universe, _ = seed_history(db)
+    seed_regime_benchmark(db, sessions, universe)
+    request = backtest_request(sessions)
+    historical = HistoricalCompositionService(db)
+    baseline = historical.run_backtest(request)
+    baseline_portfolio = historical.run_portfolio(portfolio_request(sessions))
+    prepared = historical.prepare(request)
+    execution = historical.execute_backtest_prepared(request, prepared)
+
+    attribution = MarketRegimeService(db).research_attribution(
+        RegimeResearchAttributionRequest(
+            backtest=request,
+            benchmark=universe.symbol,
+            source_mode="DEMO",
+        )
+    )
+    regime_by_date = {
+        item.observation_date: item.classification
+        for item in attribution.regime_history.classifications
+    }
+    expected_trades = Counter(
+        regime_by_date.get(trade.signal_date, "INSUFFICIENT_HISTORY")
+        for trade in execution.trades
+    )
+    assert {
+        item.classification: item.executed_trade_count for item in attribution.buckets
+    } == {key: expected_trades[key] for key in (
+        "TRENDING_BULL",
+        "TRENDING_BEAR",
+        "SIDEWAYS",
+        "HIGH_VOLATILITY",
+        "INSUFFICIENT_HISTORY",
+    )}
+    assert all(trade.signal_date < trade.entry_date for trade in execution.trades)
+    assert attribution.trade_count_reconciled
+    assert attribution.net_pnl_reconciled
+    assert attribution.attributed_trade_count == baseline.total_trade_count
+    assert attribution.attributed_net_pnl == baseline.analytics.total_net_pnl
+    assert attribution.backtest.historical_signal_fingerprint == baseline.historical_signal_fingerprint
+    assert attribution.backtest.backtest_run_fingerprint == baseline.backtest_run_fingerprint
+    assert sum(item.signal_count for item in attribution.buckets) == len(prepared.setups)
+    assert attribution.overall.executed_trade_count == baseline.total_trade_count
+    after_portfolio = historical.run_portfolio(portfolio_request(sessions))
+    assert after_portfolio.portfolio_run_fingerprint == baseline_portfolio.portfolio_run_fingerprint
+    assert sum(item.winning_trade_count for item in attribution.buckets) == attribution.overall.winning_trade_count
+    assert sum(item.losing_trade_count for item in attribution.buckets) == attribution.overall.losing_trade_count
+
+
+def test_regime_definition_version_changes_only_overlay_fingerprint(db):
+    sessions, universe, _ = seed_history(db)
+    seed_regime_benchmark(db, sessions, universe)
+    service = MarketRegimeService(db)
+    baseline_request = RegimeResearchAttributionRequest(
+        backtest=backtest_request(sessions),
+        benchmark=universe.symbol,
+        source_mode="DEMO",
+    )
+    baseline = service.research_attribution(baseline_request)
+    variant = replace(
+        MARKET_REGIME_4_STATE_V1,
+        version="TEST_VARIANT",
+        volatility_percentile=Decimal("0.75"),
+    )
+    REGIME_DEFINITIONS[(variant.code, variant.version)] = variant
+    try:
+        changed = service.research_attribution(
+            baseline_request.model_copy(
+                update={"regime_definition_version": variant.version}
+            )
+        )
+    finally:
+        REGIME_DEFINITIONS.pop((variant.code, variant.version), None)
+    assert changed.regime_attribution_fingerprint != baseline.regime_attribution_fingerprint
+    assert changed.regime_history.regime_timeline_fingerprint != baseline.regime_history.regime_timeline_fingerprint
+    assert changed.backtest.historical_signal_fingerprint == baseline.backtest.historical_signal_fingerprint
+    assert changed.backtest.backtest_run_fingerprint == baseline.backtest.backtest_run_fingerprint
+
+
+def test_regime_attribution_saved_inline_order_and_repeated_runs_are_identical(db):
+    sessions, universe, _ = seed_history(db)
+    seed_regime_benchmark(db, sessions, universe)
+    research = ResearchService(db)
+    created = research.create_experiment(
+        ExperimentCreateRequest(
+            name="Phase 11 saved attribution source",
+            composition=inline_composition(sessions),
+        )
+    )
+    service = MarketRegimeService(db)
+    inline_request = RegimeResearchAttributionRequest(
+        backtest=backtest_request(sessions),
+        benchmark=universe.symbol,
+        source_mode="DEMO",
+    )
+    reversed_request = RegimeResearchAttributionRequest(
+        backtest=backtest_request(
+            sessions,
+            source={
+                "inline_composition": inline_composition(
+                    sessions, components=_components(reverse=True)
+                )
+            },
+        ),
+        benchmark=universe.symbol,
+        source_mode="DEMO",
+    )
+    saved_request = RegimeResearchAttributionRequest(
+        backtest=backtest_request(
+            sessions, source={"experiment_id": created.experiment.id}
+        ),
+        benchmark=universe.symbol,
+        source_mode="DEMO",
+    )
+    inline = service.research_attribution(inline_request)
+    repeated = service.research_attribution(inline_request)
+    reordered = service.research_attribution(reversed_request)
+    saved = service.research_attribution(saved_request)
+
+    assert inline.regime_attribution_fingerprint == repeated.regime_attribution_fingerprint
+    assert inline.regime_attribution_fingerprint == reordered.regime_attribution_fingerprint
+    assert inline.regime_attribution_fingerprint == saved.regime_attribution_fingerprint
+    assert inline.backtest.historical_signal_fingerprint == saved.backtest.historical_signal_fingerprint
+    assert inline.backtest.backtest_run_fingerprint == saved.backtest.backtest_run_fingerprint
+
+
+def test_regime_attribution_is_invariant_to_row_order_and_ineligible_future_data(db, monkeypatch):
+    sessions, universe, securities = seed_history(db)
+    seed_regime_benchmark(db, sessions, universe)
+    request = RegimeResearchAttributionRequest(
+        backtest=backtest_request(sessions),
+        benchmark=universe.symbol,
+        source_mode="DEMO",
+    )
+    canonical_service = MarketRegimeService(db)
+    canonical = canonical_service.research_attribution(request)
+
+    reordered_service = MarketRegimeService(db)
+    original = reordered_service.indices.price_history
+    monkeypatch.setattr(
+        reordered_service.indices,
+        "price_history",
+        lambda *args, **kwargs: list(reversed(original(*args, **kwargs))),
+    )
+    reordered = reordered_service.research_attribution(request)
+    assert reordered.regime_attribution_fingerprint == canonical.regime_attribution_fingerprint
+
+    future_security = _security("P9FUTURE")
+    db.add(future_security)
+    db.flush()
+    db.add(
+        IndexMembership(
+            index_id=universe.id,
+            security_id=future_security.id,
+            valid_from=sessions[-1] + timedelta(days=1),
+            source="PHASE11_FUTURE",
+        )
+    )
+    db.add(
+        CorporateAction(
+            security_id=securities[0].id,
+            action_type="STOCK_SPLIT",
+            announcement_date=sessions[-1] + timedelta(days=1),
+            ex_date=sessions[-1] + timedelta(days=5),
+            ratio_numerator=2,
+            ratio_denominator=1,
+            source="PHASE11_FUTURE",
+            available_at=datetime.combine(
+                sessions[-1] + timedelta(days=1), time(15, 30), tzinfo=IST
+            ),
+        )
+    )
+    db.commit()
+    after = MarketRegimeService(db).research_attribution(request)
+    assert after.regime_attribution_fingerprint == canonical.regime_attribution_fingerprint
+    assert after.backtest.historical_signal_fingerprint == canonical.backtest.historical_signal_fingerprint
+    assert after.backtest.backtest_run_fingerprint == canonical.backtest.backtest_run_fingerprint
+
+
+def test_regime_attribution_api_returns_additive_overlay(db, client):
+    sessions, universe, _ = seed_history(db)
+    seed_regime_benchmark(db, sessions, universe)
+    payload = RegimeResearchAttributionRequest(
+        backtest=backtest_request(sessions),
+        benchmark=universe.symbol,
+        source_mode="DEMO",
+    ).model_dump(mode="json")
+    response = client.post("/api/v1/regimes/research-attribution", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trade_count_reconciled"] is True
+    assert body["net_pnl_reconciled"] is True
+    assert len(body["regime_attribution_fingerprint"]) == 64
 
 
 def test_range_composition_generates_diagnostics_and_next_open_trades(db):
