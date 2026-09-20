@@ -6,7 +6,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select
 
-from app.fundamentals.definitions import normalize_concept
+from app.fundamentals.definitions import (
+    SECTOR_BENCHMARK_MAPPING_CODE,
+    SECTOR_BENCHMARK_MAPPING_VERSION,
+    normalize_concept,
+    sector_benchmark_symbol,
+)
 from app.fundamentals.service import FundamentalIntelligenceService
 from app.ingestion.nse.artifacts import ArtifactBytes
 from app.ingestion.nse.definitions import ArtifactType
@@ -211,13 +216,14 @@ def test_metric_unavailable_reason_is_explicit(db):
     assert metric.status == "UNAVAILABLE" and metric.reason
 
 
-def _classification(db, security, run, artifact, *, snapshot=date(2026, 9, 20), available=None, sector="Technology", industry="Software", basic="IT Services"):
+def _classification(db, security, run, artifact, *, snapshot=date(2026, 9, 20), available=None, sector="Technology", industry="Software", basic="IT Services", sector_benchmark_index_id=None):
     row = SecurityIndustryClassification(
         security_id=security.id, macro_economic_sector="Services", sector=sector,
         industry=industry, basic_industry=basic, snapshot_date=snapshot,
         available_at=available or datetime(2026, 9, 20, tzinfo=UTC), source="TEST",
         source_artifact_id=artifact.id, ingestion_run_id=run.id, parser_version="1",
         normalized_fingerprint=(security.symbol + str(snapshot)).ljust(64, "0"),
+        sector_benchmark_index_id=sector_benchmark_index_id,
     )
     db.add(row); db.flush(); return row
 
@@ -265,6 +271,46 @@ def test_stock_vs_nifty_relative_strength_and_percentile_are_deterministic(db):
     assert all(item.status == "AVAILABLE" for item in first.metrics)
     assert first.model_dump() == second.model_dump()
     assert all(item.percentile is not None for item in first.metrics)
+    assert all(item.security_return is not None for item in first.metrics)
+    assert all(item.benchmark_return is not None for item in first.metrics)
+
+
+def test_sector_mapping_registry_is_explicit_and_versioned():
+    assert SECTOR_BENCHMARK_MAPPING_CODE == "ALPHADESK_NSE_SECTOR_BENCHMARK_MAPPING"
+    assert SECTOR_BENCHMARK_MAPPING_VERSION == "1"
+    assert sector_benchmark_symbol("Information Technology") == "NIFTYIT"
+    assert sector_benchmark_symbol("information technology") is None
+    assert sector_benchmark_symbol("Information Technology Services") is None
+
+
+def test_stock_vs_sector_relative_strength_uses_common_official_sessions(db):
+    alpha, _, _ = _price_foundation(db)
+    run, artifact = _provenance(db)
+    sector = MarketIndex(name="NIFTY IT", symbol="NIFTYIT", provider="OFFICIAL_NSE_INDICES_PUBLIC", exchange="NSE")
+    db.add(sector); db.flush()
+    start = date(2026, 1, 1)
+    known_at = datetime(2026, 9, 20, tzinfo=UTC)
+    for offset in range(130):
+        if offset == 25:  # a missing benchmark day must not be interpolated
+            continue
+        day = start + timedelta(days=offset)
+        db.add(IndexDailyPrice(index_id=sector.id, trading_date=day, open=100 + offset, high=101 + offset, low=99 + offset, close=100 + offset, source_mode="OFFICIAL", source="TEST", available_at=known_at))
+    _classification(db, alpha, run, artifact, sector="Information Technology", sector_benchmark_index_id=sector.id)
+    db.commit()
+    result = FundamentalIntelligenceService(db).relative_strength("ALPHA", as_of=datetime(2026, 9, 21, tzinfo=UTC))
+    assert result.sector_benchmark == "NIFTYIT"
+    assert result.sector_metrics_status == "AVAILABLE"
+    assert result.sector_metrics[-1].status == "AVAILABLE"
+    assert result.sector_metrics[-1].security_return is not None
+    assert result.sector_metrics[-1].benchmark_return is not None
+
+
+def test_sector_relative_strength_unavailable_without_verified_mapping(db):
+    _price_foundation(db)
+    result = FundamentalIntelligenceService(db).relative_strength("ALPHA", as_of=datetime(2026, 9, 21, tzinfo=UTC))
+    assert result.sector_benchmark is None
+    assert result.sector_metrics_status == "UNAVAILABLE"
+    assert all(item.value is None for item in result.sector_metrics)
 
 
 def test_relative_strength_insufficient_history(db):
@@ -343,6 +389,37 @@ def test_classification_import_is_idempotent_and_not_backcast(db):
     assert first.inserted == 1 and second.repeated_artifact
     assert intelligence.classification("ALPHA", as_of=datetime(2026, 9, 19, tzinfo=UTC)).status == "UNAVAILABLE"
     assert intelligence.classification("ALPHA", as_of=datetime(2026, 9, 21, tzinfo=UTC)).status == "READY"
+
+
+def test_classification_import_links_only_existing_official_exact_sector_index(db):
+    db.add(_security())
+    db.add(MarketIndex(name="NIFTY IT", symbol="NIFTYIT", provider="OFFICIAL_NSE_INDICES_PUBLIC", exchange="NSE"))
+    db.commit()
+    service = NseIngestionService(db, store=_MemoryStore())
+    artifact = ArtifactBytes(
+        "classification.csv",
+        b"Symbol,Series,ISIN,Macro Economic Sector,Sector,Industry,Basic Industry\n"
+        b"ALPHA,EQ,INE000000001,Services,Information Technology,Software,IT Services\n",
+        "fixture:classification",
+    )
+    result = service.import_artifact(ArtifactType.INDUSTRY_CLASSIFICATION, date(2026, 9, 20), artifact)
+    row = db.scalar(select(SecurityIndustryClassification))
+    assert result.inserted == 1
+    assert row is not None and row.sector_benchmark_index_id is not None
+
+
+def test_research_summary_exposes_eod_return_classification_and_relative_components(db):
+    alpha, _, _ = _price_foundation(db)
+    run, artifact = _provenance(db)
+    _classification(db, alpha, run, artifact)
+    db.commit()
+    result = FundamentalIntelligenceService(db).research_summary("ALPHA", as_of=datetime(2026, 9, 21, tzinfo=UTC))
+    assert result.latest_market_date is not None
+    assert result.one_day_return is not None
+    assert result.data_source == "OFFICIAL_NSE_PUBLIC"
+    assert result.basic_industry == "IT Services"
+    assert len(result.market_relative_strength) == 3
+    assert len(result.sector_relative_strength) == 3
 
 
 def test_data_health_reports_infrastructure_without_data_as_unavailable(db):

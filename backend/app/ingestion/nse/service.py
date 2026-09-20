@@ -65,7 +65,7 @@ from app.models import (
     SourceArtifact,
     TradingCalendar,
 )
-from app.fundamentals.definitions import normalize_concept
+from app.fundamentals.definitions import normalize_concept, sector_benchmark_symbol
 
 
 class NseIngestionError(RuntimeError):
@@ -1185,6 +1185,20 @@ class NseIngestionService:
         )
         by_symbol = {item.symbol: item for item in securities}
         by_isin = {item.isin: item for item in securities if item.isin}
+        mapped_symbols = {
+            symbol
+            for row in typed
+            if (symbol := sector_benchmark_symbol(row.sector)) is not None
+        }
+        benchmark_indices = {
+            item.symbol: item
+            for item in self.session.scalars(
+                select(MarketIndex).where(
+                    MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                    MarketIndex.symbol.in_(mapped_symbols),
+                )
+            )
+        } if mapped_symbols else {}
         for row in typed:
             security = by_symbol.get(row.symbol)
             if security is None or security is not by_isin.get(row.isin):
@@ -1227,6 +1241,8 @@ class NseIngestionService:
                 continue
             if mutate:
                 assert artifact_id is not None and run_id is not None and available_at is not None
+                benchmark_symbol = sector_benchmark_symbol(row.sector)
+                benchmark = benchmark_indices.get(benchmark_symbol) if benchmark_symbol else None
                 self.session.add(
                     SecurityIndustryClassification(
                         security_id=security.id,
@@ -1241,7 +1257,7 @@ class NseIngestionService:
                         ingestion_run_id=run_id,
                         parser_version=SOURCE_DEFINITIONS[ArtifactType.INDUSTRY_CLASSIFICATION].parser_version,
                         normalized_fingerprint=fingerprint,
-                        sector_benchmark_index_id=None,
+                        sector_benchmark_index_id=benchmark.id if benchmark else None,
                     )
                 )
             plan.inserted += 1

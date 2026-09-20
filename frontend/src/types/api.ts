@@ -1512,12 +1512,22 @@ export interface SecurityFundamentals {
   as_of: string;
   filings: Array<{
     id: string;
+    source_filing_id: string | null;
+    filing_type: string;
+    reporting_frequency: string;
     period_start: string;
     period_end: string;
+    fiscal_year: number;
+    fiscal_quarter: number | null;
     scope: 'CONSOLIDATED' | 'STANDALONE';
+    audit_status: string;
+    submission_at: string;
     available_at: string;
     revision_status: string;
-    facts: Array<{ normalized_concept: string | null; source_concept: string; value: string | null; unit: string; value_nature: string }>;
+    supersedes_filing_id: string | null;
+    parser_version: string;
+    normalized_fingerprint: string;
+    facts: Array<{ normalized_concept: string | null; source_concept: string; value: string | null; unit: string; scale: number; fact_kind: string; value_nature: string; period_start: string; period_end: string }>;
   }>;
   warnings: string[];
 }
@@ -1527,7 +1537,7 @@ export interface FundamentalMetrics {
   symbol: string;
   as_of: string;
   source_scope: 'CONSOLIDATED' | 'STANDALONE' | null;
-  metrics: Array<{ code: string; version: string; value: string | null; status: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null; underlying_periods: string[] }>;
+  metrics: Array<{ code: string; version: string; value: string | null; status: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null; as_of: string; source_scope: 'CONSOLIDATED' | 'STANDALONE' | null; underlying_periods: string[] }>;
 }
 
 export interface SecurityClassification {
@@ -1536,10 +1546,14 @@ export interface SecurityClassification {
   status: IntelligenceStatus;
   as_of: string;
   snapshot_date: string | null;
+  available_at: string | null;
   macro_economic_sector: string | null;
   sector: string | null;
   industry: string | null;
   basic_industry: string | null;
+  source: string | null;
+  parser_version: string | null;
+  normalized_fingerprint: string | null;
   sector_benchmark_symbol: string | null;
   sector_benchmark_status: 'AVAILABLE' | 'UNAVAILABLE';
   peers: Record<string, Array<{ security_id: string; symbol: string; company_name: string }>>;
@@ -1553,10 +1567,26 @@ export interface SecurityRelativeStrength {
   universe: string;
   benchmark: string;
   definition: string;
-  metrics: Array<{ code: string; version: string; sessions: number; value: string | null; percentile: string | null; status: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null }>;
+  metrics: RelativeStrengthMetric[];
   sector_benchmark: string | null;
+  sector_metrics: RelativeStrengthMetric[];
   sector_metrics_status: 'AVAILABLE' | 'UNAVAILABLE';
   warnings: string[];
+}
+
+export interface RelativeStrengthMetric {
+  code: string;
+  version: string;
+  sessions: number;
+  value: string | null;
+  security_return: string | null;
+  benchmark_return: string | null;
+  percentile: string | null;
+  status: 'AVAILABLE' | 'UNAVAILABLE';
+  reason: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  eligible_security_count: number;
 }
 
 export interface SecurityResearchSummary {
@@ -1566,6 +1596,15 @@ export interface SecurityResearchSummary {
   as_of: string;
   latest_market_date: string | null;
   latest_close: string | null;
+  one_day_return: string | null;
+  data_source: string | null;
+  macro_economic_sector: string | null;
+  sector: string | null;
+  industry: string | null;
+  basic_industry: string | null;
+  market_relative_strength: RelativeStrengthMetric[];
+  sector_benchmark: string | null;
+  sector_relative_strength: RelativeStrengthMetric[];
   fundamental_status: IntelligenceStatus;
   classification_status: IntelligenceStatus;
   relative_strength_status: IntelligenceStatus;

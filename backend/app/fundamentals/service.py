@@ -405,18 +405,35 @@ class FundamentalIntelligenceService:
         )
 
     @staticmethod
-    def _relative_value(security_prices: list[tuple[date, Decimal]], benchmark_prices: list[tuple[date, Decimal]], sessions: int) -> tuple[Decimal | None, date | None, date | None]:
+    def _relative_value(security_prices: list[tuple[date, Decimal]], benchmark_prices: list[tuple[date, Decimal]], sessions: int) -> tuple[Decimal | None, Decimal | None, Decimal | None, date | None, date | None]:
         benchmark_by_date = dict(benchmark_prices)
         common = [(day, close, benchmark_by_date[day]) for day, close in security_prices if day in benchmark_by_date]
         if len(common) < sessions + 1:
-            return None, None, None
+            return None, None, None, None, None
         start_day, start_security, start_benchmark = common[-(sessions + 1)]
         end_day, end_security, end_benchmark = common[-1]
         if start_security <= 0 or start_benchmark <= 0:
-            return None, None, None
+            return None, None, None, None, None
         security_return = end_security / start_security - Decimal(1)
         benchmark_return = end_benchmark / start_benchmark - Decimal(1)
-        return security_return - benchmark_return, start_day, end_day
+        return security_return - benchmark_return, security_return, benchmark_return, start_day, end_day
+
+    def _index_prices(self, index: MarketIndex | None, as_of: datetime) -> list[tuple[date, Decimal]]:
+        if index is None:
+            return []
+        return [
+            (day, Decimal(close))
+            for day, close in self.session.execute(
+                select(IndexDailyPrice.trading_date, IndexDailyPrice.close)
+                .where(
+                    IndexDailyPrice.index_id == index.id,
+                    IndexDailyPrice.source_mode == "OFFICIAL",
+                    IndexDailyPrice.trading_date <= as_of.date(),
+                    IndexDailyPrice.available_at <= as_of,
+                )
+                .order_by(IndexDailyPrice.trading_date)
+            )
+        ]
 
     def relative_strength(self, symbol: str, *, as_of: datetime, universe: str = "NIFTY200") -> RelativeStrengthResponse:
         security = self._security(symbol)
@@ -432,19 +449,7 @@ class FundamentalIntelligenceService:
                     )
                 )
             )
-        benchmark_prices = [] if index is None else [
-            (day, Decimal(close))
-            for day, close in self.session.execute(
-                select(IndexDailyPrice.trading_date, IndexDailyPrice.close)
-                .where(
-                    IndexDailyPrice.index_id == index.id,
-                    IndexDailyPrice.source_mode == "OFFICIAL",
-                    IndexDailyPrice.trading_date <= as_of.date(),
-                    IndexDailyPrice.available_at <= as_of,
-                )
-                .order_by(IndexDailyPrice.trading_date)
-            )
-        ]
+        benchmark_prices = self._index_prices(index, as_of)
         all_prices: dict[UUID, list[tuple[date, Decimal]]] = defaultdict(list)
         ids = sorted(set(member_ids + [security.id]), key=str)
         if ids:
@@ -461,7 +466,7 @@ class FundamentalIntelligenceService:
                 all_prices[security_id].append((day, Decimal(close)))
         metrics: list[RelativeStrengthMetricResponse] = []
         for code, sessions in RS_PERIODS.items():
-            value, start, end = self._relative_value(all_prices[security.id], benchmark_prices, sessions)
+            value, security_return, benchmark_return, start, end = self._relative_value(all_prices[security.id], benchmark_prices, sessions)
             eligible_values = [
                 candidate
                 for member_id in member_ids
@@ -474,6 +479,8 @@ class FundamentalIntelligenceService:
                 RelativeStrengthMetricResponse(
                     code=code, version=RELATIVE_STRENGTH_VERSION, sessions=sessions,
                     value=_round(value) if value is not None else None,
+                    security_return=_round(security_return) if security_return is not None else None,
+                    benchmark_return=_round(benchmark_return) if benchmark_return is not None else None,
                     percentile=_round(percentile) if percentile is not None else None,
                     status="AVAILABLE" if value is not None else "UNAVAILABLE",
                     reason=None if value is not None else "INSUFFICIENT_COMMON_POINT_IN_TIME_PRICE_HISTORY",
@@ -482,23 +489,48 @@ class FundamentalIntelligenceService:
             )
         classification = self._classification_row(security.id, as_of)
         sector_index = self.session.get(MarketIndex, classification.sector_benchmark_index_id) if classification and classification.sector_benchmark_index_id else None
+        sector_prices = self._index_prices(sector_index, as_of)
+        sector_metrics: list[RelativeStrengthMetricResponse] = []
+        for code, sessions in RS_PERIODS.items():
+            value, security_return, benchmark_return, start, end = self._relative_value(
+                all_prices[security.id], sector_prices, sessions
+            )
+            sector_metrics.append(
+                RelativeStrengthMetricResponse(
+                    code=code, version=RELATIVE_STRENGTH_VERSION, sessions=sessions,
+                    value=_round(value) if value is not None else None,
+                    security_return=_round(security_return) if security_return is not None else None,
+                    benchmark_return=_round(benchmark_return) if benchmark_return is not None else None,
+                    percentile=None,
+                    status="AVAILABLE" if value is not None else "UNAVAILABLE",
+                    reason=None if value is not None else "INSUFFICIENT_COMMON_POINT_IN_TIME_SECTOR_HISTORY",
+                    start_date=start, end_date=end, eligible_security_count=0,
+                )
+            )
+        sector_ready = any(item.status == "AVAILABLE" for item in sector_metrics)
         return RelativeStrengthResponse(
             security_id=security.id, symbol=security.symbol, as_of=as_of, universe=universe,
             benchmark=universe,
             definition="security close-to-close price return minus benchmark close-to-close price return over common sessions",
             metrics=metrics, sector_benchmark=sector_index.symbol if sector_index else None,
-            sector_metrics_status="UNAVAILABLE",
-            warnings=[] if sector_index else ["SECTOR_BENCHMARK_MAPPING_UNAVAILABLE"],
+            sector_metrics=sector_metrics,
+            sector_metrics_status="AVAILABLE" if sector_ready else "UNAVAILABLE",
+            warnings=([] if sector_ready else ["SECTOR_BENCHMARK_HISTORY_UNAVAILABLE"])
+            if sector_index else ["SECTOR_BENCHMARK_MAPPING_UNAVAILABLE"],
         )
 
     def research_summary(self, symbol: str, *, as_of: datetime) -> ResearchSummaryResponse:
         security = self._security(symbol)
-        latest = self.session.execute(
-            select(DailyPrice.trading_date, DailyPrice.close)
+        latest_rows = list(self.session.execute(
+            select(DailyPrice.trading_date, DailyPrice.close, DailyPrice.data_origin)
             .where(DailyPrice.security_id == security.id, DailyPrice.trading_date <= as_of.date(), DailyPrice.ingested_at <= as_of)
             .order_by(DailyPrice.trading_date.desc())
-            .limit(1)
-        ).first()
+            .limit(2)
+        ))
+        latest = latest_rows[0] if latest_rows else None
+        one_day_return = None
+        if len(latest_rows) == 2 and Decimal(latest_rows[1][1]) > 0:
+            one_day_return = Decimal(latest_rows[0][1]) / Decimal(latest_rows[1][1]) - Decimal(1)
         fundamentals = self.fundamentals(symbol, as_of=as_of)
         classification = self.classification(symbol, as_of=as_of)
         relative = self.relative_strength(symbol, as_of=as_of)
@@ -507,6 +539,15 @@ class FundamentalIntelligenceService:
             security_id=security.id, symbol=security.symbol, company_name=security.company_name,
             as_of=as_of, latest_market_date=latest[0] if latest else None,
             latest_close=Decimal(latest[1]) if latest else None,
+            one_day_return=_round(one_day_return) if one_day_return is not None else None,
+            data_source=latest[2] if latest else None,
+            macro_economic_sector=classification.macro_economic_sector,
+            sector=classification.sector,
+            industry=classification.industry,
+            basic_industry=classification.basic_industry,
+            market_relative_strength=relative.metrics,
+            sector_benchmark=relative.sector_benchmark,
+            sector_relative_strength=relative.sector_metrics,
             fundamental_status=fundamentals.status,
             classification_status=classification.status,
             relative_strength_status="READY" if rs_ready else "UNAVAILABLE",

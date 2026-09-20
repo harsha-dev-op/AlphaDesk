@@ -126,6 +126,8 @@ class RelativeStrengthMetricResponse(BaseModel):
     version: str
     sessions: int
     value: Decimal | None
+    security_return: Decimal | None
+    benchmark_return: Decimal | None
     percentile: Decimal | None
     status: Literal["AVAILABLE", "UNAVAILABLE"]
     reason: str | None
@@ -143,6 +145,7 @@ class RelativeStrengthResponse(BaseModel):
     definition: str
     metrics: list[RelativeStrengthMetricResponse]
     sector_benchmark: str | None
+    sector_metrics: list[RelativeStrengthMetricResponse]
     sector_metrics_status: Literal["AVAILABLE", "UNAVAILABLE"]
     warnings: list[str]
 
@@ -154,6 +157,15 @@ class ResearchSummaryResponse(BaseModel):
     as_of: datetime
     latest_market_date: date | None
     latest_close: Decimal | None
+    one_day_return: Decimal | None
+    data_source: str | None
+    macro_economic_sector: str | None
+    sector: str | None
+    industry: str | None
+    basic_industry: str | None
+    market_relative_strength: list[RelativeStrengthMetricResponse]
+    sector_benchmark: str | None
+    sector_relative_strength: list[RelativeStrengthMetricResponse]
     fundamental_status: Status
     classification_status: Status
     relative_strength_status: Status

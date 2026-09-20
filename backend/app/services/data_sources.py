@@ -11,6 +11,7 @@ from app.models import (
     DailyPrice,
     DataIngestionRun,
     FundamentalFiling,
+    FundamentalFact,
     IndexMembership,
     IngestionIssue,
     IndexDailyPrice,
@@ -464,14 +465,26 @@ class DataSourceCoverageService:
             )
             or 0
         )
-        filing_count, filing_securities, filing_start, filing_end = self.session.execute(
+        filing_count, filing_securities, filing_start, filing_end, filing_period_start, filing_period_end = self.session.execute(
             select(
                 func.count(),
                 func.count(func.distinct(FundamentalFiling.security_id)),
+                func.min(FundamentalFiling.available_at),
+                func.max(FundamentalFiling.available_at),
                 func.min(FundamentalFiling.period_end),
                 func.max(FundamentalFiling.period_end),
             )
         ).one()
+        fundamental_fact_count = int(
+            self.session.scalar(select(func.count()).select_from(FundamentalFact)) or 0
+        )
+        consolidated_filing_count = int(
+            self.session.scalar(
+                select(func.count()).select_from(FundamentalFiling).where(
+                    FundamentalFiling.scope == "CONSOLIDATED"
+                )
+            ) or 0
+        )
         classification_count, classification_securities, classification_date = self.session.execute(
             select(
                 func.count(),
@@ -479,6 +492,13 @@ class DataSourceCoverageService:
                 func.max(SecurityIndustryClassification.snapshot_date),
             )
         ).one()
+        nifty200_classified = int(
+            self.session.scalar(
+                select(func.count(func.distinct(SecurityIndustryClassification.security_id))).where(
+                    SecurityIndustryClassification.security_id.in_(member_ids)
+                )
+            ) or 0
+        ) if member_ids else 0
         sector_benchmark_mappings = int(
             self.session.scalar(
                 select(func.count())
@@ -487,6 +507,19 @@ class DataSourceCoverageService:
             )
             or 0
         )
+        activated_sector_indices, sector_session_start, sector_session_end = self.session.execute(
+            select(
+                func.count(func.distinct(IndexDailyPrice.index_id)),
+                func.min(IndexDailyPrice.trading_date),
+                func.max(IndexDailyPrice.trading_date),
+            )
+            .join(MarketIndex, MarketIndex.id == IndexDailyPrice.index_id)
+            .where(
+                MarketIndex.symbol != "NIFTY200",
+                MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                IndexDailyPrice.source_mode == "OFFICIAL",
+            )
+        ).one()
 
         def membership_dataset(symbol: str, expected: int) -> ActivationDatasetResponse:
             item = membership_by_symbol[symbol]
@@ -635,18 +668,28 @@ class DataSourceCoverageService:
                 status="PARTIAL" if filing_count else "UNAVAILABLE",
                 row_count=int(filing_count or 0),
                 item_count=int(filing_securities or 0),
-                coverage_start=filing_start,
-                coverage_end=filing_end,
+                coverage_start=filing_period_start,
+                coverage_end=filing_period_end,
                 detail="Append-only point-in-time filings and normalized facts; parser infrastructure alone is not data readiness.",
                 warnings=[] if filing_count else ["OFFICIAL_FUNDAMENTALS_NOT_IMPORTED"],
-                metrics={"filings": int(filing_count or 0), "securities": int(filing_securities or 0)},
+                metrics={
+                    "filings": int(filing_count or 0),
+                    "facts": fundamental_fact_count,
+                    "securities": int(filing_securities or 0),
+                    "consolidated_filings": consolidated_filing_count,
+                    "standalone_filings": int(filing_count or 0) - consolidated_filing_count,
+                    "earliest_availability": filing_start.isoformat() if filing_start else None,
+                    "latest_availability": filing_end.isoformat() if filing_end else None,
+                    "earliest_period_end": str(filing_period_start) if filing_period_start else None,
+                    "latest_period_end": str(filing_period_end) if filing_period_end else None,
+                },
             ),
             ActivationDatasetResponse(
                 code="INDUSTRY_CLASSIFICATION",
                 label="Official industry classification",
                 status=(
                     "READY"
-                    if official_security_count and classification_securities == official_security_count
+                    if len(member_ids) == 200 and nifty200_classified == 200
                     else "PARTIAL" if classification_count else "UNAVAILABLE"
                 ),
                 row_count=int(classification_count or 0),
@@ -655,19 +698,27 @@ class DataSourceCoverageService:
                 coverage_end=classification_date,
                 detail="Official four-level current snapshots; current classifications are never backcast.",
                 warnings=[] if classification_count else ["OFFICIAL_CLASSIFICATION_NOT_IMPORTED"],
-                metrics={"classifications": int(classification_count or 0), "securities": int(classification_securities or 0)},
+                metrics={
+                    "classifications": int(classification_count or 0),
+                    "securities": int(classification_securities or 0),
+                    "nifty_200_members": len(member_ids),
+                    "nifty_200_classified": nifty200_classified,
+                },
             ),
             ActivationDatasetResponse(
                 code="SECTOR_BENCHMARKS",
                 label="Official sector benchmarks",
-                status="PARTIAL" if sector_benchmark_mappings else "UNAVAILABLE",
+                status="PARTIAL" if sector_benchmark_mappings and activated_sector_indices else "UNAVAILABLE",
                 row_count=sector_benchmark_mappings,
-                item_count=sector_benchmark_mappings,
-                coverage_start=None,
-                coverage_end=None,
+                item_count=int(activated_sector_indices or 0),
+                coverage_start=sector_session_start,
+                coverage_end=sector_session_end,
                 detail="Only explicit security-classification to official index mappings are eligible; no proxy index is invented.",
-                warnings=[] if sector_benchmark_mappings else ["SECTOR_BENCHMARKS_NOT_ACTIVATED"],
-                metrics={"explicit_mappings": sector_benchmark_mappings},
+                warnings=[] if sector_benchmark_mappings and activated_sector_indices else ["SECTOR_BENCHMARKS_NOT_ACTIVATED"],
+                metrics={
+                    "explicit_mappings": sector_benchmark_mappings,
+                    "activated_indices": int(activated_sector_indices or 0),
+                },
             ),
         ]
 

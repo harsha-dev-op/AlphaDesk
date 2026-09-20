@@ -9,6 +9,8 @@ METRIC_ENGINE_CODE = "ALPHADESK_FUNDAMENTAL_METRICS"
 METRIC_ENGINE_VERSION = "1"
 RELATIVE_STRENGTH_CODE = "ALPHADESK_MARKET_RELATIVE_STRENGTH"
 RELATIVE_STRENGTH_VERSION = "1"
+SECTOR_BENCHMARK_MAPPING_CODE = "ALPHADESK_NSE_SECTOR_BENCHMARK_MAPPING"
+SECTOR_BENCHMARK_MAPPING_VERSION = "1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,3 +71,23 @@ METRIC_DEFINITIONS: dict[str, str] = {
 }
 
 RS_PERIODS: dict[str, int] = {"RS_1M_21D": 21, "RS_3M_63D": 63, "RS_6M_126D": 126}
+
+# Exact, reviewed NSE Indices sector labels only.  This registry intentionally
+# does not perform substring/fuzzy matching: an unfamiliar classification must
+# remain unmapped until it is reviewed against the official classification.
+SECTOR_BENCHMARK_MAPPINGS: dict[str, str] = {
+    "Automobile and Auto Components": "NIFTYAUTO",
+    "Fast Moving Consumer Goods": "NIFTYFMCG",
+    "Financial Services": "NIFTYFIN",
+    "Healthcare": "NIFTYHEALTHCARE",
+    "Information Technology": "NIFTYIT",
+    "Metals & Mining": "NIFTYMETAL",
+    "Oil Gas & Consumable Fuels": "NIFTYOILGAS",
+    "Pharmaceuticals": "NIFTYPHARMA",
+    "Realty": "NIFTYREALTY",
+}
+
+
+def sector_benchmark_symbol(sector: str) -> str | None:
+    """Return a benchmark only for an exact, versioned classification label."""
+    return SECTOR_BENCHMARK_MAPPINGS.get(sector.strip())
