@@ -105,6 +105,20 @@ def build_parser() -> argparse.ArgumentParser:
     holidays_parser.add_argument("file")
     holidays_parser.add_argument("--as-of", required=True, type=_date)
     holidays_parser.add_argument("--dry-run", action="store_true")
+
+    fundamentals_parser = subparsers.add_parser(
+        "fundamentals", help="Import an official structured financial-results CSV"
+    )
+    fundamentals_parser.add_argument("file")
+    fundamentals_parser.add_argument("--as-of", required=True, type=_date)
+    fundamentals_parser.add_argument("--dry-run", action="store_true")
+
+    classifications_parser = subparsers.add_parser(
+        "classifications", help="Import an official NSE Indices classification snapshot"
+    )
+    classifications_parser.add_argument("file")
+    classifications_parser.add_argument("--as-of", required=True, type=_date)
+    classifications_parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -213,6 +227,20 @@ def _run(args: argparse.Namespace) -> object:
         if args.command == "holidays":
             return service.import_local(
                 ArtifactType.TRADING_HOLIDAYS,
+                args.as_of,
+                args.file,
+                dry_run=args.dry_run,
+            ).as_dict()
+        if args.command == "fundamentals":
+            return service.import_local(
+                ArtifactType.FINANCIAL_RESULTS,
+                args.as_of,
+                args.file,
+                dry_run=args.dry_run,
+            ).as_dict()
+        if args.command == "classifications":
+            return service.import_local(
+                ArtifactType.INDUSTRY_CLASSIFICATION,
                 args.as_of,
                 args.file,
                 dry_run=args.dry_run,

@@ -25,6 +25,8 @@ class ArtifactType(StrEnum):
     NIFTY_200_INDEX_HISTORY = "NIFTY_200_INDEX_HISTORY"
     CORPORATE_ACTIONS = "CORPORATE_ACTIONS"
     TRADING_HOLIDAYS = "TRADING_HOLIDAYS"
+    FINANCIAL_RESULTS = "FINANCIAL_RESULTS"
+    INDUSTRY_CLASSIFICATION = "INDUSTRY_CLASSIFICATION"
 
 
 class IngestionStatus(StrEnum):
@@ -142,6 +144,28 @@ SOURCE_DEFINITIONS: dict[ArtifactType, SourceDefinition] = {
         "1.0.0",
         "Supported through local official CSV import; exchange pages remain the source of truth.",
         "Only explicit listed holidays are closed; a missing artifact never proves a holiday.",
+    ),
+    ArtifactType.FINANCIAL_RESULTS: SourceDefinition(
+        ArtifactType.FINANCIAL_RESULTS,
+        ProviderCode.NSE_PUBLIC,
+        "National Stock Exchange of India Limited",
+        "https://www.nseindia.com/companies-listing/corporate-filings-financial-results",
+        "Operator-downloaded structured financial-results CSV",
+        "NSE_FINANCIAL_RESULTS",
+        "1.0.0",
+        "Local official artifact import; no automated bulk filing download is attempted.",
+        "Each row requires a trustworthy timezone-aware submission/broadcast timestamp; period end is never availability.",
+    ),
+    ArtifactType.INDUSTRY_CLASSIFICATION: SourceDefinition(
+        ArtifactType.INDUSTRY_CLASSIFICATION,
+        ProviderCode.NSE_INDICES_PUBLIC,
+        "NSE Indices Limited",
+        "https://www.niftyindices.com/resources/industry-classification",
+        "Current four-level industry-classification CSV",
+        "NSE_INDICES_INDUSTRY_CLASSIFICATION",
+        "1.0.0",
+        "Local official artifact import with checksum provenance.",
+        "Current snapshot only; it is available from truthful retrieval/import time and is never historically backcast.",
     ),
 }
 

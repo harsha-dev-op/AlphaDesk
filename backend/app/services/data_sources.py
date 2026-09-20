@@ -10,11 +10,13 @@ from app.models import (
     CorporateAction,
     DailyPrice,
     DataIngestionRun,
+    FundamentalFiling,
     IndexMembership,
     IngestionIssue,
     IndexDailyPrice,
     MarketIndex,
     Security,
+    SecurityIndustryClassification,
     SourceArtifact,
     TradingCalendar,
 )
@@ -462,6 +464,29 @@ class DataSourceCoverageService:
             )
             or 0
         )
+        filing_count, filing_securities, filing_start, filing_end = self.session.execute(
+            select(
+                func.count(),
+                func.count(func.distinct(FundamentalFiling.security_id)),
+                func.min(FundamentalFiling.period_end),
+                func.max(FundamentalFiling.period_end),
+            )
+        ).one()
+        classification_count, classification_securities, classification_date = self.session.execute(
+            select(
+                func.count(),
+                func.count(func.distinct(SecurityIndustryClassification.security_id)),
+                func.max(SecurityIndustryClassification.snapshot_date),
+            )
+        ).one()
+        sector_benchmark_mappings = int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(SecurityIndustryClassification)
+                .where(SecurityIndustryClassification.sector_benchmark_index_id.is_not(None))
+            )
+            or 0
+        )
 
         def membership_dataset(symbol: str, expected: int) -> ActivationDatasetResponse:
             item = membership_by_symbol[symbol]
@@ -603,6 +628,46 @@ class DataSourceCoverageService:
                     "confirmed_sessions": official_price_sessions,
                     "official_origin_session_rows": calendar_sessions,
                 },
+            ),
+            ActivationDatasetResponse(
+                code="FUNDAMENTALS",
+                label="Official company fundamentals",
+                status="PARTIAL" if filing_count else "UNAVAILABLE",
+                row_count=int(filing_count or 0),
+                item_count=int(filing_securities or 0),
+                coverage_start=filing_start,
+                coverage_end=filing_end,
+                detail="Append-only point-in-time filings and normalized facts; parser infrastructure alone is not data readiness.",
+                warnings=[] if filing_count else ["OFFICIAL_FUNDAMENTALS_NOT_IMPORTED"],
+                metrics={"filings": int(filing_count or 0), "securities": int(filing_securities or 0)},
+            ),
+            ActivationDatasetResponse(
+                code="INDUSTRY_CLASSIFICATION",
+                label="Official industry classification",
+                status=(
+                    "READY"
+                    if official_security_count and classification_securities == official_security_count
+                    else "PARTIAL" if classification_count else "UNAVAILABLE"
+                ),
+                row_count=int(classification_count or 0),
+                item_count=int(classification_securities or 0),
+                coverage_start=classification_date,
+                coverage_end=classification_date,
+                detail="Official four-level current snapshots; current classifications are never backcast.",
+                warnings=[] if classification_count else ["OFFICIAL_CLASSIFICATION_NOT_IMPORTED"],
+                metrics={"classifications": int(classification_count or 0), "securities": int(classification_securities or 0)},
+            ),
+            ActivationDatasetResponse(
+                code="SECTOR_BENCHMARKS",
+                label="Official sector benchmarks",
+                status="PARTIAL" if sector_benchmark_mappings else "UNAVAILABLE",
+                row_count=sector_benchmark_mappings,
+                item_count=sector_benchmark_mappings,
+                coverage_start=None,
+                coverage_end=None,
+                detail="Only explicit security-classification to official index mappings are eligible; no proxy index is invented.",
+                warnings=[] if sector_benchmark_mappings else ["SECTOR_BENCHMARKS_NOT_ACTIVATED"],
+                metrics={"explicit_mappings": sector_benchmark_mappings},
             ),
         ]
 

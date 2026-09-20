@@ -177,6 +177,7 @@ See [the Phase 9 composition backtesting specification](docs/composition_backtes
 See [the Phase 10 performance report](docs/phase10_performance.md) for profiling evidence, parity guarantees, prepared-context design, exact before/after PostgreSQL measurements, query counts, memory bounds, and deferred optimizations.
 See [the Phase 11 market-regime specification](docs/market_regime.md) for exact classification rules, benchmark storage, point-in-time behavior, transitions, fingerprints, attribution, APIs, performance, and limitations.
 See [the Phase 12 official-market-data activation report](docs/official_market_data.md) for activated coverage, provenance, readiness rules, smoke checks, and the exact remaining manual-artifact workflow.
+See [the Phase 13A fundamental and sector intelligence specification](docs/fundamental_sector_intelligence.md) for append-only filing/fact architecture, scope and revision rules, deterministic metrics, official classifications, market-relative strength, APIs, and manual activation workflow.
 See [the official/public NSE source audit](docs/nse_data_sources.md) and [the ingestion runbook](docs/data_ingestion.md) for source contracts, responsible access, local fallback, CLI commands, validation, provenance, and bounded backfill operations.
 
 ## Verification

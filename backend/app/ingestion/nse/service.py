@@ -34,6 +34,8 @@ from app.ingestion.nse.parsers import (
     NormalizedConstituent,
     NormalizedCorporateAction,
     NormalizedHoliday,
+    NormalizedFundamentalFactRow,
+    NormalizedIndustryClassification,
     NormalizedIndexPrice,
     NormalizedPrice,
     NormalizedSecurity,
@@ -43,6 +45,8 @@ from app.ingestion.nse.parsers import (
     parse_constituents,
     parse_corporate_actions,
     parse_holidays,
+    parse_financial_results,
+    parse_industry_classifications,
     parse_index_history,
     parse_security_master,
 )
@@ -50,14 +54,18 @@ from app.models import (
     CorporateAction,
     DailyPrice,
     DataIngestionRun,
+    FundamentalFact,
+    FundamentalFiling,
     IndexMembership,
     IndexDailyPrice,
     IngestionIssue,
     MarketIndex,
     Security,
+    SecurityIndustryClassification,
     SourceArtifact,
     TradingCalendar,
 )
+from app.fundamentals.definitions import normalize_concept
 
 
 class NseIngestionError(RuntimeError):
@@ -902,6 +910,10 @@ class NseIngestionService:
                 requested_start=requested_start,
                 requested_end=requested_end,
             )
+        if artifact_type == ArtifactType.FINANCIAL_RESULTS:
+            return parse_financial_results(artifact, source_date=source_date)
+        if artifact_type == ArtifactType.INDUSTRY_CLASSIFICATION:
+            return parse_industry_classifications(artifact)
         raise ValueError("Unsupported artifact type")
 
     def _apply(
@@ -948,7 +960,292 @@ class NseIngestionService:
                 available_at=available_at,
                 mutate=mutate,
             )
+        if artifact_type == ArtifactType.FINANCIAL_RESULTS:
+            return self._apply_fundamental_facts(
+                parsed.rows, artifact_id, run_id, mutate=mutate
+            )
+        if artifact_type == ArtifactType.INDUSTRY_CLASSIFICATION:
+            return self._apply_classifications(
+                parsed.rows,
+                source_date,
+                artifact_id,
+                run_id,
+                available_at=available_at,
+                mutate=mutate,
+            )
         raise ValueError("Unsupported artifact type")
+
+    def _apply_fundamental_facts(
+        self,
+        rows: Iterable[object],
+        artifact_id: UUID | None,
+        run_id: UUID | None,
+        *,
+        mutate: bool,
+    ) -> _WritePlan:
+        typed = tuple(row for row in rows if isinstance(row, NormalizedFundamentalFactRow))
+        plan = _WritePlan()
+        securities = list(
+            self.session.scalars(
+                select(Security).where(
+                    Security.exchange == "NSE",
+                    or_(
+                        Security.symbol.in_({row.symbol for row in typed}),
+                        Security.isin.in_({row.isin for row in typed}),
+                    ),
+                )
+            )
+        )
+        by_symbol = {item.symbol: item for item in securities}
+        by_isin = {item.isin: item for item in securities if item.isin}
+        grouped: dict[tuple[str, str], list[NormalizedFundamentalFactRow]] = {}
+        for row in typed:
+            grouped.setdefault((row.symbol, row.source_filing_id), []).append(row)
+
+        for (symbol, source_filing_id), filing_rows in grouped.items():
+            first = filing_rows[0]
+            security = by_symbol.get(symbol)
+            if security is None or security is not by_isin.get(first.isin):
+                plan.issue(
+                    IssueSeverity.ERROR,
+                    "FUNDAMENTAL_SECURITY_IDENTITY_UNRESOLVED",
+                    "Symbol and ISIN do not resolve to one security-master identity",
+                    row_key=f"{symbol}:{source_filing_id}",
+                    rejected=True,
+                )
+                continue
+            filing_fields = (
+                "filing_type", "reporting_frequency", "period_start", "period_end",
+                "fiscal_year", "fiscal_quarter", "scope", "audit_status", "submission_at",
+                "supersedes_source_filing_id",
+            )
+            if any(any(getattr(row, field) != getattr(first, field) for field in filing_fields) for row in filing_rows[1:]):
+                plan.issue(
+                    IssueSeverity.ERROR,
+                    "INCONSISTENT_FILING_METADATA",
+                    "Rows for one source filing disagree on filing metadata",
+                    row_key=f"{symbol}:{source_filing_id}",
+                    rejected=True,
+                    conflict=True,
+                )
+                continue
+            fingerprint = _fingerprint(
+                {
+                    "security_id": security.id,
+                    "source_filing_id": source_filing_id,
+                    **{field: getattr(first, field) for field in filing_fields},
+                    "facts": sorted(
+                        (
+                            row.source_concept,
+                            str(row.value) if row.value is not None else None,
+                            row.unit,
+                            row.scale,
+                            row.fact_kind,
+                            row.value_nature,
+                            row.period_start,
+                            row.period_end,
+                        )
+                        for row in filing_rows
+                    ),
+                }
+            )
+            identical = self.session.scalar(
+                select(FundamentalFiling).where(
+                    FundamentalFiling.source == "NSE_CORPORATE_FILINGS",
+                    FundamentalFiling.normalized_fingerprint == fingerprint,
+                )
+            )
+            if identical is not None:
+                plan.unchanged += len(filing_rows)
+                continue
+            predecessor = None
+            if first.supersedes_source_filing_id:
+                predecessor = self.session.scalar(
+                    select(FundamentalFiling)
+                    .where(
+                        FundamentalFiling.security_id == security.id,
+                        FundamentalFiling.source_filing_id == first.supersedes_source_filing_id,
+                    )
+                    .order_by(FundamentalFiling.available_at.desc())
+                    .limit(1)
+                )
+                if predecessor is None:
+                    plan.issue(
+                        IssueSeverity.ERROR,
+                        "SUPERSEDED_FILING_NOT_FOUND",
+                        "Declared predecessor filing is unavailable",
+                        row_key=f"{symbol}:{source_filing_id}",
+                        rejected=True,
+                    )
+                    continue
+                already_superseded = self.session.scalar(
+                    select(FundamentalFiling.id).where(
+                        FundamentalFiling.supersedes_filing_id == predecessor.id
+                    )
+                )
+                if already_superseded is not None:
+                    plan.issue(
+                        IssueSeverity.ERROR,
+                        "FILING_REVISION_CONFLICT",
+                        "The predecessor already has a revision",
+                        row_key=f"{symbol}:{source_filing_id}",
+                        rejected=True,
+                        conflict=True,
+                    )
+                    continue
+            same_source_id = self.session.scalar(
+                select(FundamentalFiling.id).where(
+                    FundamentalFiling.security_id == security.id,
+                    FundamentalFiling.source_filing_id == source_filing_id,
+                )
+            )
+            if same_source_id is not None:
+                plan.issue(
+                    IssueSeverity.ERROR,
+                    "FILING_CONTENT_CONFLICT",
+                    "Existing source filing id has different normalized content",
+                    row_key=f"{symbol}:{source_filing_id}",
+                    rejected=True,
+                    conflict=True,
+                )
+                continue
+            if not mutate:
+                plan.inserted += len(filing_rows)
+                continue
+            assert artifact_id is not None and run_id is not None
+            filing = FundamentalFiling(
+                security_id=security.id,
+                source="NSE_CORPORATE_FILINGS",
+                source_filing_id=source_filing_id,
+                filing_type=first.filing_type,
+                reporting_frequency=first.reporting_frequency,
+                period_start=first.period_start,
+                period_end=first.period_end,
+                fiscal_year=first.fiscal_year,
+                fiscal_quarter=first.fiscal_quarter,
+                scope=first.scope,
+                audit_status=first.audit_status,
+                submission_at=first.submission_at,
+                available_at=first.submission_at,
+                revision_status="REVISED" if predecessor else "ORIGINAL",
+                supersedes_filing_id=predecessor.id if predecessor else None,
+                source_artifact_id=artifact_id,
+                ingestion_run_id=run_id,
+                parser_version=SOURCE_DEFINITIONS[ArtifactType.FINANCIAL_RESULTS].parser_version,
+                normalized_fingerprint=fingerprint,
+            )
+            self.session.add(filing)
+            self.session.flush()
+            for row in filing_rows:
+                normalized = normalize_concept(row.source_concept)
+                if normalized is None:
+                    plan.issue(
+                        IssueSeverity.WARNING,
+                        "UNMAPPED_FUNDAMENTAL_CONCEPT",
+                        "Source concept retained without normalized mapping",
+                        row_key=f"{symbol}:{source_filing_id}:{row.source_concept}",
+                    )
+                self.session.add(
+                    FundamentalFact(
+                        filing_id=filing.id,
+                        normalized_concept=normalized,
+                        source_concept=row.source_concept,
+                        value=row.value,
+                        unit=row.unit,
+                        scale=row.scale,
+                        fact_kind=row.fact_kind,
+                        value_nature=row.value_nature,
+                        period_start=row.period_start,
+                        period_end=row.period_end,
+                        fact_metadata={"concept_registry_version": "1"},
+                    )
+                )
+            plan.inserted += len(filing_rows)
+        return plan
+
+    def _apply_classifications(
+        self,
+        rows: Iterable[object],
+        source_date: date,
+        artifact_id: UUID | None,
+        run_id: UUID | None,
+        *,
+        available_at: datetime | None,
+        mutate: bool,
+    ) -> _WritePlan:
+        typed = tuple(row for row in rows if isinstance(row, NormalizedIndustryClassification))
+        plan = _WritePlan()
+        securities = list(
+            self.session.scalars(
+                select(Security).where(
+                    Security.exchange == "NSE",
+                    or_(Security.symbol.in_({row.symbol for row in typed}), Security.isin.in_({row.isin for row in typed})),
+                )
+            )
+        )
+        by_symbol = {item.symbol: item for item in securities}
+        by_isin = {item.isin: item for item in securities if item.isin}
+        for row in typed:
+            security = by_symbol.get(row.symbol)
+            if security is None or security is not by_isin.get(row.isin):
+                plan.issue(
+                    IssueSeverity.ERROR,
+                    "CLASSIFICATION_SECURITY_IDENTITY_UNRESOLVED",
+                    "Symbol and ISIN do not resolve to one security-master identity",
+                    row_key=f"{row.symbol}:{row.isin}",
+                    rejected=True,
+                )
+                continue
+            fingerprint = _fingerprint(
+                {
+                    "security_id": security.id,
+                    "snapshot_date": source_date,
+                    "macro_economic_sector": row.macro_economic_sector,
+                    "sector": row.sector,
+                    "industry": row.industry,
+                    "basic_industry": row.basic_industry,
+                }
+            )
+            existing = self.session.scalar(
+                select(SecurityIndustryClassification).where(
+                    SecurityIndustryClassification.security_id == security.id,
+                    SecurityIndustryClassification.snapshot_date == source_date,
+                )
+            )
+            if existing is not None:
+                if existing.normalized_fingerprint == fingerprint:
+                    plan.unchanged += 1
+                else:
+                    plan.issue(
+                        IssueSeverity.ERROR,
+                        "CLASSIFICATION_SNAPSHOT_CONFLICT",
+                        "Existing snapshot has different classification content",
+                        row_key=row.symbol,
+                        rejected=True,
+                        conflict=True,
+                    )
+                continue
+            if mutate:
+                assert artifact_id is not None and run_id is not None and available_at is not None
+                self.session.add(
+                    SecurityIndustryClassification(
+                        security_id=security.id,
+                        macro_economic_sector=row.macro_economic_sector,
+                        sector=row.sector,
+                        industry=row.industry,
+                        basic_industry=row.basic_industry,
+                        snapshot_date=source_date,
+                        available_at=available_at,
+                        source="NSE_INDICES_INDUSTRY_CLASSIFICATION",
+                        source_artifact_id=artifact_id,
+                        ingestion_run_id=run_id,
+                        parser_version=SOURCE_DEFINITIONS[ArtifactType.INDUSTRY_CLASSIFICATION].parser_version,
+                        normalized_fingerprint=fingerprint,
+                        sector_benchmark_index_id=None,
+                    )
+                )
+            plan.inserted += 1
+        return plan
 
     def _apply_securities(
         self,

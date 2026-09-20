@@ -144,6 +144,41 @@ class NormalizedHoliday:
     description: str
 
 
+@dataclass(frozen=True, slots=True)
+class NormalizedFundamentalFactRow:
+    symbol: str
+    series: str
+    isin: str
+    source_filing_id: str
+    supersedes_source_filing_id: str | None
+    filing_type: str
+    reporting_frequency: str
+    period_start: date
+    period_end: date
+    fiscal_year: int
+    fiscal_quarter: int | None
+    scope: str
+    audit_status: str
+    submission_at: datetime
+    source_concept: str
+    value: Decimal | None
+    unit: str
+    scale: int
+    fact_kind: str
+    value_nature: str
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedIndustryClassification:
+    symbol: str
+    series: str
+    isin: str
+    macro_economic_sector: str
+    sector: str
+    industry: str
+    basic_industry: str
+
+
 def _normalized_header(value: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", value.upper())
 
@@ -884,6 +919,164 @@ def parse_holidays(artifact: ArtifactBytes) -> ParseResult[NormalizedHoliday]:
         rejected_row_count=issues.rejected_count,
         warning_count=issues.warning_count,
     )
+
+
+FUNDAMENTAL_ALIASES = {
+    "symbol": ("Symbol", "TckrSymb"),
+    "series": ("Series", "SctySrs"),
+    "isin": ("ISIN", "ISIN Code"),
+    "source_filing_id": ("Source Filing ID", "Filing ID", "Broadcast ID"),
+    "supersedes_source_filing_id": ("Supersedes Filing ID", "Supersedes Broadcast ID"),
+    "filing_type": ("Filing Type", "Result Type"),
+    "reporting_frequency": ("Reporting Frequency", "Frequency"),
+    "period_start": ("Period Start", "From Date"),
+    "period_end": ("Period End", "To Date", "Quarter Ended"),
+    "fiscal_year": ("Fiscal Year", "Financial Year"),
+    "fiscal_quarter": ("Fiscal Quarter", "Quarter"),
+    "scope": ("Scope", "Consolidated Standalone"),
+    "audit_status": ("Audit Status", "Audited Unaudited"),
+    "submission_at": ("Submission Timestamp", "Broadcast Timestamp", "Submitted At"),
+    "source_concept": ("Concept", "Particulars", "Source Concept"),
+    "value": ("Value", "Current Period Value"),
+    "unit": ("Unit", "Currency"),
+    "scale": ("Scale",),
+    "fact_kind": ("Fact Kind", "Period Type"),
+    "value_nature": ("Value Nature", "Value Type"),
+}
+
+
+def _timestamp(value: str, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} is not ISO-8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a timezone offset")
+    return parsed.astimezone(UTC)
+
+
+def parse_financial_results(
+    artifact: ArtifactBytes, *, source_date: date | None = None
+) -> ParseResult[NormalizedFundamentalFactRow]:
+    headers, source_rows = csv_records(artifact)
+    required = {
+        "symbol", "series", "isin", "source_filing_id", "filing_type",
+        "reporting_frequency", "period_start", "period_end", "fiscal_year",
+        "scope", "audit_status", "submission_at", "source_concept", "value",
+        "unit", "scale", "fact_kind", "value_nature",
+    }
+    columns = _resolve_headers(headers, FUNDAMENTAL_ALIASES, required=required)
+    output: list[NormalizedFundamentalFactRow] = []
+    issues = _IssueCollector()
+    seen: set[tuple[str, str, str, date, date]] = set()
+    for row_number, row in source_rows:
+        try:
+            symbol = row[columns["symbol"]].strip().upper()
+            series = row[columns["series"]].strip().upper()
+            isin = row[columns["isin"]].strip().upper()
+            _validate_symbol_and_isin(symbol, isin)
+            if series != "EQ":
+                raise ValueError("financial result is outside the EQ-series policy")
+            source_filing_id = row[columns["source_filing_id"]].strip()
+            if not source_filing_id:
+                raise ValueError("source filing id is blank")
+            period_start = _parse_date(row[columns["period_start"]], "period start")
+            period_end = _parse_date(row[columns["period_end"]], "period end")
+            if period_end < period_start:
+                raise ValueError("period end precedes period start")
+            frequency = row[columns["reporting_frequency"]].strip().upper()
+            scope = row[columns["scope"]].strip().upper()
+            audit_status = row[columns["audit_status"]].strip().upper() or "UNKNOWN"
+            fact_kind = row[columns["fact_kind"]].strip().upper()
+            value_nature = row[columns["value_nature"]].strip().upper()
+            if frequency not in {"QUARTERLY", "ANNUAL"}:
+                raise ValueError("reporting frequency is unsupported")
+            if scope not in {"CONSOLIDATED", "STANDALONE"}:
+                raise ValueError("scope is unsupported")
+            if audit_status not in {"AUDITED", "UNAUDITED", "UNKNOWN"}:
+                raise ValueError("audit status is unsupported")
+            if fact_kind not in {"DURATION", "INSTANT"}:
+                raise ValueError("fact kind is unsupported")
+            if value_nature not in {"QUARTERLY", "YTD", "ANNUAL", "INSTANT"}:
+                raise ValueError("value nature is unsupported")
+            scale = int(row[columns["scale"]].strip())
+            if scale < 0 or scale > 12:
+                raise ValueError("scale must be between 0 and 12")
+            fiscal_year = int(row[columns["fiscal_year"]].strip())
+            quarter_text = row[columns["fiscal_quarter"]].strip() if "fiscal_quarter" in columns else ""
+            fiscal_quarter = int(quarter_text) if quarter_text else None
+            if fiscal_quarter is not None and fiscal_quarter not in {1, 2, 3, 4}:
+                raise ValueError("fiscal quarter must be 1 through 4")
+            source_concept = row[columns["source_concept"]].strip()
+            if not source_concept:
+                raise ValueError("source concept is blank")
+            value = _optional_decimal(row[columns["value"]], "value")
+            submission_at = _timestamp(row[columns["submission_at"]], "submission timestamp")
+            if source_date is not None and submission_at.date() > source_date:
+                raise ValueError("submission timestamp cannot be later than the artifact source date")
+            unit = row[columns["unit"]].strip().upper()
+            if not unit:
+                raise ValueError("unit is blank")
+        except (ValueError, KeyError) as exc:
+            issues.add(IssueSeverity.ERROR, "MALFORMED_FUNDAMENTAL_FACT", str(exc), row_number=row_number, rejected=True)
+            continue
+        identity = (symbol, source_filing_id, source_concept.casefold(), period_start, period_end)
+        if identity in seen:
+            issues.add(IssueSeverity.ERROR, "DUPLICATE_FUNDAMENTAL_FACT", "Duplicate filing fact in artifact", row_number=row_number, row_key=f"{symbol}:{source_filing_id}:{source_concept}", rejected=True)
+            continue
+        seen.add(identity)
+        output.append(
+            NormalizedFundamentalFactRow(
+                symbol=symbol, series=series, isin=isin, source_filing_id=source_filing_id,
+                supersedes_source_filing_id=(row[columns["supersedes_source_filing_id"]].strip() if "supersedes_source_filing_id" in columns else None) or None,
+                filing_type=row[columns["filing_type"]].strip().upper(),
+                reporting_frequency=frequency, period_start=period_start, period_end=period_end,
+                fiscal_year=fiscal_year, fiscal_quarter=fiscal_quarter, scope=scope,
+                audit_status=audit_status, submission_at=submission_at,
+                source_concept=source_concept, value=value, unit=unit, scale=scale,
+                fact_kind=fact_kind, value_nature=value_nature,
+            )
+        )
+    return ParseResult(tuple(output), tuple(issues.items), len(source_rows), issues.rejected_count, issues.warning_count)
+
+
+CLASSIFICATION_ALIASES = {
+    "symbol": ("Symbol", "TckrSymb"),
+    "series": ("Series", "SctySrs"),
+    "isin": ("ISIN", "ISIN Code"),
+    "macro": ("Macro Economic Sector", "Macro-Economic Sector"),
+    "sector": ("Sector",),
+    "industry": ("Industry",),
+    "basic_industry": ("Basic Industry",),
+}
+
+
+def parse_industry_classifications(artifact: ArtifactBytes) -> ParseResult[NormalizedIndustryClassification]:
+    headers, source_rows = csv_records(artifact)
+    columns = _resolve_headers(headers, CLASSIFICATION_ALIASES, required=set(CLASSIFICATION_ALIASES))
+    output: list[NormalizedIndustryClassification] = []
+    issues = _IssueCollector()
+    seen: set[str] = set()
+    for row_number, row in source_rows:
+        try:
+            symbol = row[columns["symbol"]].strip().upper()
+            series = row[columns["series"]].strip().upper()
+            isin = row[columns["isin"]].strip().upper()
+            _validate_symbol_and_isin(symbol, isin)
+            if series != "EQ":
+                raise ValueError("classification is outside the EQ-series policy")
+            levels = [row[columns[key]].strip() for key in ("macro", "sector", "industry", "basic_industry")]
+            if any(not value for value in levels):
+                raise ValueError("all four official classification levels are required")
+        except (ValueError, KeyError) as exc:
+            issues.add(IssueSeverity.ERROR, "MALFORMED_INDUSTRY_CLASSIFICATION", str(exc), row_number=row_number, rejected=True)
+            continue
+        if isin in seen:
+            issues.add(IssueSeverity.ERROR, "DUPLICATE_INDUSTRY_CLASSIFICATION", "Duplicate security classification", row_number=row_number, row_key=isin, rejected=True)
+            continue
+        seen.add(isin)
+        output.append(NormalizedIndustryClassification(symbol, series, isin, *levels))
+    return ParseResult(tuple(output), tuple(issues.items), len(source_rows), issues.rejected_count, issues.warning_count)
 
 
 def parser_identity(artifact_type: ArtifactType) -> tuple[str, str]:

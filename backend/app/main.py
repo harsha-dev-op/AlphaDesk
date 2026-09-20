@@ -8,6 +8,7 @@ from app.api.routes import (
     backtests,
     data_sources,
     features,
+    fundamentals,
     health,
     indices,
     portfolio,
@@ -39,6 +40,7 @@ app.include_router(health.router)
 app.include_router(data_sources.router)
 app.include_router(securities.router)
 app.include_router(features.router)
+app.include_router(fundamentals.router)
 app.include_router(scanner.router)
 app.include_router(strategies.router)
 app.include_router(backtests.router)

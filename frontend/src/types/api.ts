@@ -1486,3 +1486,88 @@ export interface RegimeResearchAttributionResponse {
   warnings: string[];
   research_disclaimer: string;
 }
+
+export type IntelligenceStatus = 'READY' | 'PARTIAL' | 'UNAVAILABLE';
+
+export interface FundamentalsMetadata {
+  concept_registry_code: string;
+  concept_registry_version: string;
+  metric_engine_code: string;
+  metric_engine_version: string;
+  relative_strength_code: string;
+  relative_strength_version: string;
+  concepts: Array<{ code: string; statement: string; fact_kind: string; aliases: string[] }>;
+  metrics: Record<string, string>;
+  relative_strength_periods: Record<string, number>;
+  preferred_scope: 'CONSOLIDATED';
+}
+
+export interface SecurityFundamentals {
+  security_id: string;
+  symbol: string;
+  requested_scope: 'CONSOLIDATED' | 'STANDALONE';
+  effective_scope: 'CONSOLIDATED' | 'STANDALONE' | null;
+  fallback_used: boolean;
+  status: IntelligenceStatus;
+  as_of: string;
+  filings: Array<{
+    id: string;
+    period_start: string;
+    period_end: string;
+    scope: 'CONSOLIDATED' | 'STANDALONE';
+    available_at: string;
+    revision_status: string;
+    facts: Array<{ normalized_concept: string | null; source_concept: string; value: string | null; unit: string; value_nature: string }>;
+  }>;
+  warnings: string[];
+}
+
+export interface FundamentalMetrics {
+  security_id: string;
+  symbol: string;
+  as_of: string;
+  source_scope: 'CONSOLIDATED' | 'STANDALONE' | null;
+  metrics: Array<{ code: string; version: string; value: string | null; status: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null; underlying_periods: string[] }>;
+}
+
+export interface SecurityClassification {
+  security_id: string;
+  symbol: string;
+  status: IntelligenceStatus;
+  as_of: string;
+  snapshot_date: string | null;
+  macro_economic_sector: string | null;
+  sector: string | null;
+  industry: string | null;
+  basic_industry: string | null;
+  sector_benchmark_symbol: string | null;
+  sector_benchmark_status: 'AVAILABLE' | 'UNAVAILABLE';
+  peers: Record<string, Array<{ security_id: string; symbol: string; company_name: string }>>;
+  warnings: string[];
+}
+
+export interface SecurityRelativeStrength {
+  security_id: string;
+  symbol: string;
+  as_of: string;
+  universe: string;
+  benchmark: string;
+  definition: string;
+  metrics: Array<{ code: string; version: string; sessions: number; value: string | null; percentile: string | null; status: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null }>;
+  sector_benchmark: string | null;
+  sector_metrics_status: 'AVAILABLE' | 'UNAVAILABLE';
+  warnings: string[];
+}
+
+export interface SecurityResearchSummary {
+  security_id: string;
+  symbol: string;
+  company_name: string;
+  as_of: string;
+  latest_market_date: string | null;
+  latest_close: string | null;
+  fundamental_status: IntelligenceStatus;
+  classification_status: IntelligenceStatus;
+  relative_strength_status: IntelligenceStatus;
+  warnings: string[];
+}

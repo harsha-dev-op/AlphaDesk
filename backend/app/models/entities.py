@@ -290,6 +290,108 @@ class FundamentalReport(Base):
     security: Mapped[Security] = relationship()
 
 
+class FundamentalFiling(Base):
+    """Append-only, point-in-time version of one official financial filing."""
+
+    __tablename__ = "fundamental_filings"
+    __table_args__ = (
+        CheckConstraint("period_end >= period_start", name="valid_fundamental_filing_period"),
+        CheckConstraint("scope IN ('CONSOLIDATED', 'STANDALONE')", name="valid_fundamental_scope"),
+        CheckConstraint("reporting_frequency IN ('QUARTERLY', 'ANNUAL')", name="valid_fundamental_frequency"),
+        CheckConstraint("audit_status IN ('AUDITED', 'UNAUDITED', 'UNKNOWN')", name="valid_fundamental_audit_status"),
+        CheckConstraint("revision_status IN ('ORIGINAL', 'REVISED')", name="valid_fundamental_revision_status"),
+        CheckConstraint("supersedes_filing_id IS NULL OR supersedes_filing_id <> id", name="fundamental_filing_not_self_superseding"),
+        UniqueConstraint("source", "normalized_fingerprint", name="uq_fundamental_filings_source_fingerprint"),
+        UniqueConstraint("supersedes_filing_id", name="uq_fundamental_filings_supersedes"),
+        Index("ix_fundamental_filings_security_available", "security_id", "available_at"),
+        Index("ix_fundamental_filings_period_scope", "security_id", "period_end", "scope"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_filing_id: Mapped[str | None] = mapped_column(String(160))
+    filing_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    reporting_frequency: Mapped[str] = mapped_column(String(16), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    fiscal_quarter: Mapped[int | None] = mapped_column(Integer)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    audit_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    submission_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revision_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    supersedes_filing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("fundamental_filings.id", ondelete="RESTRICT"))
+    source_artifact_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("source_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    ingestion_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT"), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    normalized_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    security: Mapped[Security] = relationship()
+    facts: Mapped[list[FundamentalFact]] = relationship(back_populates="filing", cascade="all, delete-orphan")
+
+
+class FundamentalFact(Base):
+    """Auditable source fact; normalized_concept is null without an explicit mapping."""
+
+    __tablename__ = "fundamental_facts"
+    __table_args__ = (
+        CheckConstraint("fact_kind IN ('DURATION', 'INSTANT')", name="valid_fundamental_fact_kind"),
+        CheckConstraint("value_nature IN ('QUARTERLY', 'YTD', 'ANNUAL', 'INSTANT')", name="valid_fundamental_value_nature"),
+        CheckConstraint("period_end >= period_start", name="valid_fundamental_fact_period"),
+        UniqueConstraint("filing_id", "source_concept", "period_start", "period_end", name="uq_fundamental_fact_identity"),
+        Index("ix_fundamental_facts_filing_concept", "filing_id", "normalized_concept"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    filing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("fundamental_filings.id", ondelete="CASCADE"), nullable=False)
+    normalized_concept: Mapped[str | None] = mapped_column(String(64))
+    source_concept: Mapped[str] = mapped_column(String(255), nullable=False)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(30, 8))
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    scale: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fact_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    value_nature: Mapped[str] = mapped_column(String(16), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    fact_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    filing: Mapped[FundamentalFiling] = relationship(back_populates="facts")
+
+
+class SecurityIndustryClassification(Base):
+    """Append-only official NSE Indices classification snapshot."""
+
+    __tablename__ = "security_industry_classifications"
+    __table_args__ = (
+        UniqueConstraint("security_id", "snapshot_date", "normalized_fingerprint", name="uq_security_classification_snapshot"),
+        Index("ix_security_classifications_as_of", "security_id", "snapshot_date", "available_at"),
+        Index("ix_security_classifications_peer", "sector", "industry", "basic_industry"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
+    macro_economic_sector: Mapped[str] = mapped_column(String(160), nullable=False)
+    sector: Mapped[str] = mapped_column(String(160), nullable=False)
+    industry: Mapped[str] = mapped_column(String(160), nullable=False)
+    basic_industry: Mapped[str] = mapped_column(String(160), nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_artifact_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("source_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    ingestion_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("data_ingestion_runs.id", ondelete="RESTRICT"), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    normalized_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    sector_benchmark_index_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("indices.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    security: Mapped[Security] = relationship()
+    sector_benchmark: Mapped[MarketIndex | None] = relationship()
+
+
 class TradingCalendar(Base):
     __tablename__ = "trading_calendar"
     __table_args__ = (
@@ -492,6 +594,12 @@ def _reject_immutable_write(_mapper: Mapper[object], _connection: object, _targe
     raise ValueError("Saved research experiment provenance is immutable and append-only")
 
 
-for _immutable_model in (ResearchExperiment, ResearchExperimentRun):
+for _immutable_model in (
+    ResearchExperiment,
+    ResearchExperimentRun,
+    FundamentalFiling,
+    FundamentalFact,
+    SecurityIndustryClassification,
+):
     event.listen(_immutable_model, "before_update", _reject_immutable_write)
     event.listen(_immutable_model, "before_delete", _reject_immutable_write)
