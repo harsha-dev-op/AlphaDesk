@@ -1,7 +1,8 @@
+from bisect import bisect_left, bisect_right
 from datetime import UTC, date, datetime, timedelta
 
 import structlog
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -13,7 +14,7 @@ from app.models import (
     SourceArtifact,
     TradingCalendar,
 )
-from app.quality.checks import QualityCheck, QualityStatus, missing_sessions, stale_sessions, validate_ohlcv
+from app.quality.checks import QualityCheck, QualityStatus, stale_sessions
 
 logger = structlog.get_logger(__name__)
 
@@ -50,9 +51,45 @@ class DataQualityService:
         return overall, checks, latest_data, last_ingestion
 
     def _ohlc_check(self) -> QualityCheck:
-        issues = 0
-        for row in self.session.scalars(select(DailyPrice)):
-            issues += len(validate_ohlcv(open_=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume))
+        violations = (
+            case(
+                (
+                    or_(
+                        DailyPrice.open < 0,
+                        DailyPrice.high < 0,
+                        DailyPrice.low < 0,
+                        DailyPrice.close < 0,
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+            + case((DailyPrice.high < DailyPrice.low, 1), else_=0)
+            + case(
+                (
+                    or_(
+                        DailyPrice.open < DailyPrice.low,
+                        DailyPrice.open > DailyPrice.high,
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+            + case(
+                (
+                    or_(
+                        DailyPrice.close < DailyPrice.low,
+                        DailyPrice.close > DailyPrice.high,
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+            + case((DailyPrice.volume < 0, 1), else_=0)
+        )
+        issues = int(
+            self.session.scalar(select(func.coalesce(func.sum(violations), 0))) or 0
+        )
         status = QualityStatus.FAILED if issues else QualityStatus.HEALTHY
         return QualityCheck("OHLC validation", status, "No impossible OHLCV rows" if not issues else f"{issues} validation violations", issues)
 
@@ -82,40 +119,49 @@ class DataQualityService:
             )
         )
         if not bounds:
-            return QualityCheck("Session coverage", QualityStatus.HEALTHY, "No bounded price series require session checks")
-        earliest = min(row[2] for row in bounds)
-        latest = max(row[3] for row in bounds)
-        exchanges = {row[1] for row in bounds}
-        calendar_by_exchange: dict[str, list[date]] = {exchange: [] for exchange in exchanges}
+            return QualityCheck(
+                "Session coverage",
+                QualityStatus.HEALTHY,
+                "No bounded price series require session checks",
+            )
+        exchanges = {exchange for _, exchange, _, _ in bounds}
+        calendar_by_exchange: dict[str, list[date]] = {
+            exchange: [] for exchange in exchanges
+        }
         for exchange, trading_date in self.session.execute(
             select(TradingCalendar.exchange, TradingCalendar.trading_date)
             .where(
                 TradingCalendar.exchange.in_(exchanges),
                 TradingCalendar.is_trading_day.is_(True),
-                TradingCalendar.trading_date.between(earliest, latest),
             )
             .order_by(TradingCalendar.exchange, TradingCalendar.trading_date)
         ):
             calendar_by_exchange[exchange].append(trading_date)
-        security_ids = {row[0] for row in bounds}
-        observed_by_security: dict[object, list[date]] = {security_id: [] for security_id in security_ids}
-        for security_id, trading_date in self.session.execute(
-            select(DailyPrice.security_id, DailyPrice.trading_date)
-            .where(
-                DailyPrice.security_id.in_(security_ids),
-                DailyPrice.trading_date.between(earliest, latest),
+        observed_counts = {
+            security_id: int(count)
+            for security_id, count in self.session.execute(
+                select(DailyPrice.security_id, func.count())
+                .select_from(DailyPrice)
+                .join(Security, Security.id == DailyPrice.security_id)
+                .join(
+                    TradingCalendar,
+                    and_(
+                        TradingCalendar.exchange == Security.exchange,
+                        TradingCalendar.is_trading_day.is_(True),
+                        DailyPrice.trading_date == TradingCalendar.trading_date,
+                    ),
+                )
+                .where(Security.is_active.is_(True))
+                .group_by(DailyPrice.security_id)
             )
-            .order_by(DailyPrice.security_id, DailyPrice.trading_date)
-        ):
-            observed_by_security[security_id].append(trading_date)
+        }
         missing_count = 0
         for security_id, exchange, series_start, series_end in bounds:
-            expected = [
-                day
-                for day in calendar_by_exchange[exchange]
-                if series_start <= day <= series_end
-            ]
-            missing_count += len(missing_sessions(expected, observed_by_security[security_id]))
+            sessions = calendar_by_exchange[exchange]
+            expected_count = bisect_right(sessions, series_end) - bisect_left(
+                sessions, series_start
+            )
+            missing_count += max(0, expected_count - observed_counts.get(security_id, 0))
         status = QualityStatus.WARNING if missing_count else QualityStatus.HEALTHY
         return QualityCheck("Session coverage", status, "All expected sessions are present" if not missing_count else f"{missing_count} expected sessions are missing", missing_count)
 

@@ -40,6 +40,7 @@ export function DataHealthWorkspace() {
   const firstIssue = quality.data?.checks.find((check) => check.status !== 'HEALTHY');
   const datasetMode = coverage.data?.mode ?? sources.data?.mode ?? 'UNKNOWN';
   const mode = modeLabels[datasetMode];
+  const equityActivation = coverage.data?.activation_datasets.find((item) => item.code === 'EQUITY_EOD');
 
   const refreshAll = () => {
     health.retry();
@@ -62,9 +63,14 @@ export function DataHealthWorkspace() {
         <div className="grid divide-y divide-border/75 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
           <MetricCard label="Dataset mode" value={coverage.loading ? <Skeleton className="h-7 w-28 rounded-none" /> : mode.label} supporting={mode.detail} icon={Layers3} accent />
           <MetricCard label="Official securities" value={coverage.loading ? <Skeleton className="h-7 w-20 rounded-none" /> : formatInteger.format(coverage.data?.official_security_count ?? 0)} supporting={`${formatInteger.format(coverage.data?.demo_security_count ?? 0)} demo records remain`} icon={Database} />
-          <MetricCard label="Official price rows" value={coverage.loading ? <Skeleton className="h-7 w-24 rounded-none" /> : formatInteger.format(coverage.data?.official_daily_price_count ?? 0)} supporting={`${formatInteger.format(coverage.data?.missing_official_sessions ?? 0)} missing official sessions`} icon={CalendarDays} />
+          <MetricCard label="Official price rows" value={coverage.loading ? <Skeleton className="h-7 w-24 rounded-none" /> : formatInteger.format(coverage.data?.official_daily_price_count ?? 0)} supporting={`${formatInteger.format(Number(equityActivation?.metrics.official_sessions ?? 0))} confirmed sessions`} icon={CalendarDays} />
           <MetricCard label="Source artifacts" value={coverage.loading ? <Skeleton className="h-7 w-20 rounded-none" /> : formatInteger.format(coverage.data?.source_artifact_count ?? 0)} supporting={coverage.data?.provider ?? 'No official provider imported'} icon={FileText} />
         </div>
+      </Surface>
+
+      <Surface className="mb-4">
+        <SurfaceHeader title="Official data activation" description="Readiness is calculated from persisted official rows. Partial never implies complete historical coverage." action={coverage.data && <StatusBadge status={coverage.data.activation_status} />} />
+        {coverage.loading ? <div className="grid gap-px bg-border/75 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 7 }, (_, index) => <div key={index} className="bg-background p-4"><Skeleton className="h-20 rounded-none" /></div>)}</div> : <div className="grid gap-px bg-border/75 sm:grid-cols-2 xl:grid-cols-4">{coverage.data?.activation_datasets.map((dataset) => <article key={dataset.code} className="min-w-0 bg-background px-4 py-4"><div className="flex items-start justify-between gap-3"><h3 className="text-sm font-semibold leading-5">{dataset.label}</h3><StatusBadge status={dataset.status} compact /></div><p className="mt-3 numeric text-xl font-semibold">{formatInteger.format(dataset.row_count)}</p><p className="mt-1 text-[0.6875rem] text-muted-foreground">{formatDate(dataset.coverage_start)} — {formatDate(dataset.coverage_end)}</p><p className="mt-3 text-xs leading-5 text-muted-foreground">{dataset.detail}</p>{dataset.warnings[0] && <p className="mt-2 break-words text-[0.6875rem] leading-4 text-warning">{dataset.warnings[0].replaceAll('_', ' ')}</p>}</article>)}</div>}
       </Surface>
 
       <div className="grid gap-4 xl:grid-cols-[1.45fr_.55fr]">

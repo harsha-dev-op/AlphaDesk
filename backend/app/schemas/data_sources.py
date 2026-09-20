@@ -62,6 +62,19 @@ class IndexCoverageResponse(BaseModel):
     warning: str | None
 
 
+class ActivationDatasetResponse(BaseModel):
+    code: str
+    label: str
+    status: Literal["UNAVAILABLE", "PARTIAL", "READY"]
+    row_count: int
+    item_count: int
+    coverage_start: date | None
+    coverage_end: date | None
+    detail: str
+    warnings: list[str]
+    metrics: dict[str, int | str | None]
+
+
 class DataCoverageResponse(BaseModel):
     mode: Literal["DEMO", "OFFICIAL_NSE", "MIXED", "UNKNOWN"]
     provider: str | None
@@ -76,6 +89,8 @@ class DataCoverageResponse(BaseModel):
     corporate_actions_promoted: int
     corporate_actions_quarantined: int
     missing_official_sessions: int
+    activation_status: Literal["UNAVAILABLE", "PARTIAL", "READY"]
+    activation_datasets: list[ActivationDatasetResponse]
     index_coverage: list[IndexCoverageResponse]
     latest_artifacts: list[ArtifactSummaryResponse]
     latest_issues: list[IngestionIssueResponse]

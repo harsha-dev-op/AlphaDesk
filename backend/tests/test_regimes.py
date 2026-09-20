@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 
 from app.data.providers import DemoMarketDataProvider
 from app.data.seed import seed_demo
-from app.models import IndexDailyPrice, MarketIndex
+from app.models import IndexDailyPrice, MarketIndex, SourceArtifact
 from app.regimes.definitions import MARKET_REGIME_4_STATE_V1
 from app.regimes.schemas import RegimeHistoryRequest
 from app.regimes.service import (
@@ -212,6 +212,36 @@ def test_demo_history_derives_all_states_transitions_distribution_and_duration(d
         trailing += 1
     assert result.latest_regime_duration_sessions == trailing
     assert result.coverage.first_classifiable_date is not None
+
+
+def test_regime_dataset_fingerprint_accepts_real_provenance_uuids(db):
+    _, payloads = _seed_demo_benchmark(db)
+    artifact = SourceArtifact(
+        provider="OFFICIAL_NSE_INDICES_PUBLIC",
+        artifact_type="NIFTY_200_INDEX_HISTORY",
+        source_date=payloads[-1]["trading_date"],
+        original_file_name="fixture.json",
+        source_locator="fixture:official",
+        imported_at=datetime.now(UTC),
+        sha256="a" * 64,
+        byte_size=2,
+        parser_code="NSE_INDICES_HISTORICAL_OHLC",
+        parser_version="1.0.0",
+        normalized_fingerprint="b" * 64,
+        parse_status="SUCCEEDED",
+    )
+    db.add(artifact)
+    db.flush()
+    first_price = db.scalar(
+        select(IndexDailyPrice).order_by(IndexDailyPrice.trading_date).limit(1)
+    )
+    first_price.source_artifact_id = artifact.id
+    db.commit()
+
+    request = _history_request(payloads)
+    first = MarketRegimeService(db).history(request)
+    second = MarketRegimeService(db).history(request)
+    assert first.benchmark_dataset_fingerprint == second.benchmark_dataset_fingerprint
 
 
 def test_future_prices_availability_and_spikes_cannot_change_earlier_timeline(db):

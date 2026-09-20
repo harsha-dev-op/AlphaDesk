@@ -12,12 +12,14 @@ from app.models import (
     DataIngestionRun,
     IndexMembership,
     IngestionIssue,
+    IndexDailyPrice,
     MarketIndex,
     Security,
     SourceArtifact,
     TradingCalendar,
 )
 from app.schemas.data_sources import (
+    ActivationDatasetResponse,
     ArtifactSummaryResponse,
     DataCoverageResponse,
     DataSourceDefinitionResponse,
@@ -106,18 +108,42 @@ class DataSourceCoverageService:
 
     def coverage(self) -> DataCoverageResponse:
         security_origins = self._origin_counts(Security)
-        price_origins = self._origin_counts(DailyPrice)
         official_security_count = security_origins.get(DataOrigin.OFFICIAL_NSE_PUBLIC.value, 0)
         demo_security_count = security_origins.get(DataOrigin.DEMO.value, 0)
         unknown_security_count = security_origins.get(DataOrigin.UNKNOWN.value, 0)
-        official_price_count = price_origins.get(DataOrigin.OFFICIAL_NSE_PUBLIC.value, 0)
-        demo_price_count = price_origins.get(DataOrigin.DEMO.value, 0)
-        mode = _mode(official_security_count + official_price_count, demo_security_count + demo_price_count, unknown_security_count)
-        price_bounds = self.session.execute(
-            select(func.min(DailyPrice.trading_date), func.max(DailyPrice.trading_date)).where(
-                DailyPrice.data_origin == DataOrigin.OFFICIAL_NSE_PUBLIC.value
+        (
+            official_price_count,
+            official_price_securities,
+            official_price_sessions,
+            official_price_start,
+            official_price_end,
+        ) = self.session.execute(
+            select(
+                func.count(),
+                func.count(func.distinct(DailyPrice.security_id)),
+                func.count(func.distinct(DailyPrice.trading_date)),
+                func.min(DailyPrice.trading_date),
+                func.max(DailyPrice.trading_date),
             )
+            .join(Security, Security.id == DailyPrice.security_id)
+            .where(Security.data_origin == DataOrigin.OFFICIAL_NSE_PUBLIC.value)
         ).one()
+        official_price_count = int(official_price_count or 0)
+        official_price_securities = int(official_price_securities or 0)
+        official_price_sessions = int(official_price_sessions or 0)
+        demo_price_count = int(
+            self.session.scalar(
+                select(func.count()).select_from(DailyPrice).where(
+                    DailyPrice.security_id.in_(
+                        select(Security.id).where(
+                            Security.data_origin == DataOrigin.DEMO.value
+                        )
+                    )
+                )
+            )
+            or 0
+        )
+        mode = _mode(official_security_count + official_price_count, demo_security_count + demo_price_count, unknown_security_count)
         latest_success = self.session.scalar(
             select(DataIngestionRun.completed_at)
             .where(DataIngestionRun.status.in_(("SUCCEEDED", "SUCCESS", "PARTIAL")))
@@ -173,6 +199,36 @@ class DataSourceCoverageService:
             or 0
         )
         index_coverage = self._index_coverage()
+        activation_datasets = self._activation_datasets(
+            official_security_count=official_security_count,
+            official_price_count=official_price_count,
+            official_price_securities=official_price_securities,
+            official_price_sessions=official_price_sessions,
+            price_start=official_price_start,
+            price_end=official_price_end,
+            index_coverage=index_coverage,
+            promoted_actions=promoted_actions,
+            quarantined_actions=quarantined_actions,
+        )
+        core_statuses = {
+            item.code: item.status
+            for item in activation_datasets
+            if item.code
+            in {
+                "SECURITY_MASTER",
+                "NIFTY_200_MEMBERSHIP",
+                "NIFTY_500_MEMBERSHIP",
+                "EQUITY_EOD",
+                "NIFTY_200_BENCHMARK",
+            }
+        }
+        activation_status = (
+            "READY"
+            if core_statuses and all(value == "READY" for value in core_statuses.values())
+            else "UNAVAILABLE"
+            if core_statuses and all(value == "UNAVAILABLE" for value in core_statuses.values())
+            else "PARTIAL"
+        )
         warnings: list[str] = []
         if any(item.coverage_kind == "CURRENT_SNAPSHOT_ONLY" for item in index_coverage):
             warnings.append("HISTORICAL_MEMBERSHIP_COVERAGE_INCOMPLETE")
@@ -186,8 +242,8 @@ class DataSourceCoverageService:
             mode=mode,
             provider="OFFICIAL_NSE_PUBLIC" if official_security_count or official_price_count else None,
             last_successful_ingestion=latest_success,
-            earliest_official_price_session=price_bounds[0],
-            latest_official_price_session=price_bounds[1],
+            earliest_official_price_session=official_price_start,
+            latest_official_price_session=official_price_end,
             official_security_count=official_security_count,
             official_daily_price_count=official_price_count,
             demo_security_count=demo_security_count,
@@ -196,6 +252,8 @@ class DataSourceCoverageService:
             corporate_actions_promoted=promoted_actions,
             corporate_actions_quarantined=quarantined_actions,
             missing_official_sessions=missing_official_sessions,
+            activation_status=activation_status,
+            activation_datasets=activation_datasets,
             index_coverage=index_coverage,
             latest_artifacts=[
                 ArtifactSummaryResponse(
@@ -228,6 +286,326 @@ class DataSourceCoverageService:
             warnings=sorted(set(warnings)),
         )
 
+    def _activation_datasets(
+        self,
+        *,
+        official_security_count: int,
+        official_price_count: int,
+        official_price_securities: int,
+        official_price_sessions: int,
+        price_start: date | None,
+        price_end: date | None,
+        index_coverage: list[IndexCoverageResponse],
+        promoted_actions: int,
+        quarantined_actions: int,
+    ) -> list[ActivationDatasetResponse]:
+        membership_by_symbol = {item.symbol: item for item in index_coverage}
+        security_artifact_date = self.session.scalar(
+            select(func.max(SourceArtifact.source_date)).where(
+                SourceArtifact.artifact_type == ArtifactType.SECURITY_MASTER.value,
+                SourceArtifact.parse_status.in_(("SUCCEEDED", "PARTIAL")),
+            )
+        )
+        nifty200 = self.session.scalar(
+            select(MarketIndex).where(
+                MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                MarketIndex.symbol == "NIFTY200",
+            )
+        )
+        member_ids: list[object] = []
+        snapshot_date: date | None = None
+        if nifty200 is not None:
+            snapshot_date = self.session.scalar(
+                select(func.max(IndexMembership.valid_from)).where(
+                    IndexMembership.index_id == nifty200.id
+                )
+            )
+            if snapshot_date is not None:
+                member_ids = list(
+                    self.session.scalars(
+                        select(IndexMembership.security_id).where(
+                            IndexMembership.index_id == nifty200.id,
+                            IndexMembership.valid_from == snapshot_date,
+                        )
+                    )
+                )
+        member_price_counts: dict[object, tuple[int, date | None, date | None]] = {}
+        if member_ids:
+            member_price_counts = {
+                security_id: (int(count), first_date, last_date)
+                for security_id, count, first_date, last_date in self.session.execute(
+                    select(
+                        DailyPrice.security_id,
+                        func.count(func.distinct(DailyPrice.trading_date)),
+                        func.min(DailyPrice.trading_date),
+                        func.max(DailyPrice.trading_date),
+                    )
+                    .where(
+                        DailyPrice.security_id.in_(member_ids),
+                        DailyPrice.data_origin == DataOrigin.OFFICIAL_NSE_PUBLIC.value,
+                    )
+                    .group_by(DailyPrice.security_id)
+                )
+            }
+        members_with_any = len(member_price_counts)
+        members_with_200 = sum(1 for count, _, _ in member_price_counts.values() if count >= 200)
+        members_with_252 = sum(1 for count, _, _ in member_price_counts.values() if count >= 252)
+        members_with_target = sum(
+            1
+            for _, first_date, last_date in member_price_counts.values()
+            if first_date is not None
+            and first_date <= date(2021, 1, 1)
+            and price_end is not None
+            and last_date == price_end
+        )
+        significant_gap_members = sum(
+            1
+            for count, _, _ in member_price_counts.values()
+            if official_price_sessions >= 20 and count < int(official_price_sessions * 0.95)
+        )
+
+        benchmark_count = 0
+        benchmark_start: date | None = None
+        benchmark_end: date | None = None
+        regime_ready_date: date | None = None
+        benchmark_missing_known_sessions = 0
+        benchmark_sessions_without_equity_eod = 0
+        if nifty200 is not None:
+            benchmark_count, benchmark_start, benchmark_end = self.session.execute(
+                select(
+                    func.count(),
+                    func.min(IndexDailyPrice.trading_date),
+                    func.max(IndexDailyPrice.trading_date),
+                ).where(
+                    IndexDailyPrice.index_id == nifty200.id,
+                    IndexDailyPrice.source_mode == "OFFICIAL",
+                )
+            ).one()
+            benchmark_count = int(benchmark_count or 0)
+            if benchmark_count >= 200:
+                regime_ready_date = self.session.scalar(
+                    select(IndexDailyPrice.trading_date)
+                    .where(
+                        IndexDailyPrice.index_id == nifty200.id,
+                        IndexDailyPrice.source_mode == "OFFICIAL",
+                    )
+                    .order_by(IndexDailyPrice.trading_date)
+                    .offset(199)
+                    .limit(1)
+                )
+            benchmark_sessions_without_equity_eod = int(
+                self.session.scalar(
+                    select(func.count())
+                    .select_from(IndexDailyPrice)
+                    .where(
+                        IndexDailyPrice.index_id == nifty200.id,
+                        IndexDailyPrice.source_mode == "OFFICIAL",
+                        ~exists(
+                            select(DailyPrice.id).where(
+                                DailyPrice.trading_date
+                                == IndexDailyPrice.trading_date,
+                                DailyPrice.data_origin
+                                == DataOrigin.OFFICIAL_NSE_PUBLIC.value,
+                            )
+                        ),
+                    )
+                )
+                or 0
+            )
+            if benchmark_start is not None and benchmark_end is not None:
+                benchmark_missing_known_sessions = int(
+                    self.session.scalar(
+                        select(func.count())
+                        .select_from(TradingCalendar)
+                        .where(
+                            TradingCalendar.exchange == "NSE",
+                            TradingCalendar.data_origin
+                            == DataOrigin.OFFICIAL_NSE_PUBLIC.value,
+                            TradingCalendar.is_trading_day.is_(True),
+                            TradingCalendar.trading_date.between(
+                                benchmark_start, benchmark_end
+                            ),
+                            ~exists(
+                                select(IndexDailyPrice.id).where(
+                                    IndexDailyPrice.index_id == nifty200.id,
+                                    IndexDailyPrice.source_mode == "OFFICIAL",
+                                    IndexDailyPrice.trading_date
+                                    == TradingCalendar.trading_date,
+                                )
+                            ),
+                        )
+                    )
+                    or 0
+                )
+
+        action_bounds = self.session.execute(
+            select(func.min(CorporateAction.ex_date), func.max(CorporateAction.ex_date)).where(
+                CorporateAction.data_origin == DataOrigin.OFFICIAL_NSE_PUBLIC.value
+            )
+        ).one()
+        calendar_count, calendar_start, calendar_end = self.session.execute(
+            select(
+                func.count(),
+                func.min(TradingCalendar.trading_date),
+                func.max(TradingCalendar.trading_date),
+            ).where(
+                TradingCalendar.data_origin == DataOrigin.OFFICIAL_NSE_PUBLIC.value
+            )
+        ).one()
+        calendar_count = int(calendar_count or 0)
+        calendar_sessions = int(
+            self.session.scalar(
+                select(func.count()).select_from(TradingCalendar).where(
+                    TradingCalendar.data_origin == DataOrigin.OFFICIAL_NSE_PUBLIC.value,
+                    TradingCalendar.is_trading_day.is_(True),
+                )
+            )
+            or 0
+        )
+
+        def membership_dataset(symbol: str, expected: int) -> ActivationDatasetResponse:
+            item = membership_by_symbol[symbol]
+            status = "READY" if item.member_count == expected else (
+                "PARTIAL" if item.member_count else "UNAVAILABLE"
+            )
+            warnings = [item.warning] if item.warning else []
+            detail = "No valid official current snapshot is imported."
+            if item.current_snapshot_present:
+                detail = "Current official snapshot only; it is not extended backward."
+            elif symbol == "NIFTY500":
+                detail = (
+                    "The current official upstream snapshot failed strict identity, series, "
+                    "and 500-member validation; no partial membership was persisted."
+                )
+                warnings = ["UPSTREAM_SNAPSHOT_VALIDATION_FAILED"]
+            return ActivationDatasetResponse(
+                code=f"{symbol.replace('NIFTY', 'NIFTY_')}_MEMBERSHIP",
+                label=f"{item.label} current membership",
+                status=status,
+                row_count=item.member_count,
+                item_count=item.member_count,
+                coverage_start=item.coverage_start,
+                coverage_end=item.coverage_end,
+                detail=detail,
+                warnings=warnings,
+                metrics={
+                    "expected_members": expected,
+                    "mapped_members": item.member_count,
+                    "unmapped_members": max(0, expected - item.member_count),
+                },
+            )
+
+        equity_status = (
+            "READY"
+            if len(member_ids) == 200 and members_with_252 == 200
+            else "PARTIAL"
+            if official_price_count
+            else "UNAVAILABLE"
+        )
+        benchmark_status = (
+            "READY" if benchmark_count >= 252 else "PARTIAL" if benchmark_count else "UNAVAILABLE"
+        )
+        return [
+            ActivationDatasetResponse(
+                code="SECURITY_MASTER",
+                label="Official NSE security master",
+                status="READY" if official_security_count else "UNAVAILABLE",
+                row_count=official_security_count,
+                item_count=official_security_count,
+                coverage_start=security_artifact_date,
+                coverage_end=security_artifact_date,
+                detail="Canonical NSE EQ-series identities with source-artifact provenance.",
+                warnings=[] if official_security_count else ["OFFICIAL_SECURITY_MASTER_NOT_IMPORTED"],
+                metrics={"official_securities": official_security_count},
+            ),
+            membership_dataset("NIFTY200", 200),
+            membership_dataset("NIFTY500", 500),
+            ActivationDatasetResponse(
+                code="EQUITY_EOD",
+                label="Official NSE cash-market EOD",
+                status=equity_status,
+                row_count=official_price_count,
+                item_count=official_price_securities,
+                coverage_start=price_start,
+                coverage_end=price_end,
+                detail="RAW EQ-series OHLCV; adjusted prices remain derived by AlphaDesk.",
+                warnings=(
+                    (
+                        ["BENCHMARK_SESSION_WITHOUT_EQUITY_EOD"]
+                        if benchmark_sessions_without_equity_eod
+                        else []
+                    )
+                    + (
+                        []
+                        if equity_status == "READY"
+                        else ["NIFTY_200_MULTIYEAR_PRICE_COVERAGE_INCOMPLETE"]
+                    )
+                ),
+                metrics={
+                    "official_sessions": official_price_sessions,
+                    "securities_with_prices": official_price_securities,
+                    "nifty200_members": len(member_ids),
+                    "nifty200_with_any_price": members_with_any,
+                    "nifty200_with_200_sessions": members_with_200,
+                    "nifty200_with_252_sessions": members_with_252,
+                    "nifty200_with_target_range": members_with_target,
+                    "nifty200_with_significant_gaps": significant_gap_members,
+                    "benchmark_sessions_without_equity_eod": benchmark_sessions_without_equity_eod,
+                },
+            ),
+            ActivationDatasetResponse(
+                code="NIFTY_200_BENCHMARK",
+                label="Official NIFTY 200 benchmark OHLC",
+                status=benchmark_status,
+                row_count=benchmark_count,
+                item_count=benchmark_count,
+                coverage_start=benchmark_start,
+                coverage_end=benchmark_end,
+                detail="OFFICIAL source mode; historical rows are knowable from retrieval/import time.",
+                warnings=(
+                    [] if benchmark_status == "READY" else ["OFFICIAL_BENCHMARK_HISTORY_INCOMPLETE"]
+                ),
+                metrics={
+                    "official_sessions": benchmark_count,
+                    "known_calendar_gaps": benchmark_missing_known_sessions,
+                    "first_regime_ready_date": (
+                        regime_ready_date.isoformat() if regime_ready_date else None
+                    ),
+                },
+            ),
+            ActivationDatasetResponse(
+                code="CORPORATE_ACTIONS",
+                label="Official corporate actions",
+                status="PARTIAL" if promoted_actions or quarantined_actions else "UNAVAILABLE",
+                row_count=promoted_actions,
+                item_count=promoted_actions,
+                coverage_start=action_bounds[0],
+                coverage_end=action_bounds[1],
+                detail="Only rows with trustworthy source publication timestamps are promoted.",
+                warnings=["CORPORATE_ACTION_AVAILABILITY_INCOMPLETE"],
+                metrics={
+                    "promoted": promoted_actions,
+                    "quarantined": quarantined_actions,
+                },
+            ),
+            ActivationDatasetResponse(
+                code="TRADING_CALENDAR",
+                label="Official NSE trading calendar",
+                status="PARTIAL" if calendar_count else "UNAVAILABLE",
+                row_count=calendar_count,
+                item_count=official_price_sessions,
+                coverage_start=calendar_start,
+                coverage_end=calendar_end,
+                detail="Confirmed sessions and imported holidays only; special sessions are never guessed.",
+                warnings=[] if calendar_count else ["OFFICIAL_TRADING_CALENDAR_NOT_IMPORTED"],
+                metrics={
+                    "calendar_rows": calendar_count,
+                    "confirmed_sessions": official_price_sessions,
+                    "official_origin_session_rows": calendar_sessions,
+                },
+            ),
+        ]
+
     def _origin_counts(self, model: type[Security] | type[DailyPrice]) -> dict[str, int]:
         rows = self.session.execute(
             select(model.data_origin, func.count()).group_by(model.data_origin)
@@ -237,6 +615,11 @@ class DataSourceCoverageService:
     def _index_coverage(self) -> list[IndexCoverageResponse]:
         results: list[IndexCoverageResponse] = []
         for symbol, label in (("NIFTY200", "NIFTY 200"), ("NIFTY500", "NIFTY 500")):
+            unavailable_warning = (
+                "UPSTREAM_SNAPSHOT_VALIDATION_FAILED"
+                if symbol == "NIFTY500"
+                else "CURRENT_SNAPSHOT_NOT_IMPORTED"
+            )
             market_index = self.session.scalar(
                 select(MarketIndex).where(
                     MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
@@ -254,7 +637,7 @@ class DataSourceCoverageService:
                         coverage_start=None,
                         coverage_end=None,
                         coverage_kind="NONE",
-                        warning="CURRENT_SNAPSHOT_NOT_IMPORTED",
+                        warning=unavailable_warning,
                     )
                 )
                 continue
@@ -290,7 +673,11 @@ class DataSourceCoverageService:
                     coverage_kind=(
                         "NONE" if snapshot_count == 0 else "CURRENT_SNAPSHOT_ONLY" if snapshot_count == 1 else "BOUNDED_SNAPSHOT_SEQUENCE"
                     ),
-                    warning="HISTORICAL_MEMBERSHIP_COVERAGE_INCOMPLETE" if snapshot_count else "CURRENT_SNAPSHOT_NOT_IMPORTED",
+                    warning=(
+                        "HISTORICAL_MEMBERSHIP_COVERAGE_INCOMPLETE"
+                        if snapshot_count
+                        else unavailable_warning
+                    ),
                 )
             )
         return results

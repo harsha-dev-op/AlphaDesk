@@ -124,6 +124,21 @@ export interface IndexCoverage {
   warning: string | null;
 }
 
+export type ActivationStatus = 'UNAVAILABLE' | 'PARTIAL' | 'READY';
+
+export interface ActivationDataset {
+  code: string;
+  label: string;
+  status: ActivationStatus;
+  row_count: number;
+  item_count: number;
+  coverage_start: string | null;
+  coverage_end: string | null;
+  detail: string;
+  warnings: string[];
+  metrics: Record<string, number | string | null>;
+}
+
 export interface DataCoverageResponse {
   mode: DatasetMode;
   provider: string | null;
@@ -138,6 +153,8 @@ export interface DataCoverageResponse {
   corporate_actions_promoted: number;
   corporate_actions_quarantined: number;
   missing_official_sessions: number;
+  activation_status: ActivationStatus;
+  activation_datasets: ActivationDataset[];
   index_coverage: IndexCoverage[];
   latest_artifacts: SourceArtifactSummary[];
   latest_issues: IngestionIssueSummary[];

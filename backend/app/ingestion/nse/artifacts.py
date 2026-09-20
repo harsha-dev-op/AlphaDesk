@@ -107,9 +107,15 @@ def csv_records(artifact: ArtifactBytes) -> tuple[list[str], list[tuple[int, dic
         raise ArtifactValidationError("CSV is not valid UTF-8") from exc
     try:
         reader = csv.DictReader(io.StringIO(text, newline=""))
-        if not reader.fieldnames or any(name is None or not name.strip() for name in reader.fieldnames):
+        if not reader.fieldnames:
             raise ArtifactSchemaDriftError("CSV header is missing or malformed")
-        headers = [name.strip() for name in reader.fieldnames]
+        raw_headers = list(reader.fieldnames)
+        trailing_empty_column = bool(raw_headers and not (raw_headers[-1] or "").strip())
+        if trailing_empty_column:
+            raw_headers = raw_headers[:-1]
+        if not raw_headers or any(name is None or not name.strip() for name in raw_headers):
+            raise ArtifactSchemaDriftError("CSV header is missing or malformed")
+        headers = [name.strip() for name in raw_headers]
         folded_headers = [name.casefold() for name in headers]
         if len(folded_headers) != len(set(folded_headers)):
             raise ArtifactSchemaDriftError("CSV header contains duplicate column names")
@@ -119,10 +125,18 @@ def csv_records(artifact: ArtifactBytes) -> tuple[list[str], list[tuple[int, dic
                 raise ArtifactValidationError("CSV row-count ceiling exceeded")
             if None in row:
                 raise ArtifactValidationError(f"Malformed CSV row at line {row_number}")
+            if trailing_empty_column and (row.get("") or "").strip():
+                raise ArtifactValidationError(
+                    f"Unexpected data in trailing CSV column at line {row_number}"
+                )
             rows.append(
                 (
                     row_number,
-                    {str(key).strip(): (value or "").strip() for key, value in row.items()},
+                    {
+                        str(key).strip(): (value or "").strip()
+                        for key, value in row.items()
+                        if key != ""
+                    },
                 )
             )
     except csv.Error as exc:

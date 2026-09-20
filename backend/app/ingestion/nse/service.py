@@ -20,19 +20,21 @@ from app.ingestion.nse.artifacts import (
     ArtifactValidationError,
     NseArtifactStore,
 )
-from app.ingestion.nse.client import DownloadedArtifact, OfficialHttpClient
+from app.ingestion.nse.client import DownloadedArtifact, OfficialHttpClient, OfficialSourceError
 from app.ingestion.nse.definitions import (
     ArtifactType,
     DataOrigin,
     IngestionStatus,
     IssueSeverity,
     SOURCE_DEFINITIONS,
+    eod_artifact_type,
     public_artifact_url,
 )
 from app.ingestion.nse.parsers import (
     NormalizedConstituent,
     NormalizedCorporateAction,
     NormalizedHoliday,
+    NormalizedIndexPrice,
     NormalizedPrice,
     NormalizedSecurity,
     ParseResult,
@@ -41,6 +43,7 @@ from app.ingestion.nse.parsers import (
     parse_constituents,
     parse_corporate_actions,
     parse_holidays,
+    parse_index_history,
     parse_security_master,
 )
 from app.models import (
@@ -48,6 +51,7 @@ from app.models import (
     DailyPrice,
     DataIngestionRun,
     IndexMembership,
+    IndexDailyPrice,
     IngestionIssue,
     MarketIndex,
     Security,
@@ -91,6 +95,62 @@ class IngestionSummary:
             {**asdict(issue), "severity": issue.severity.value} for issue in self.issues
         ]
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillFailure:
+    start: date
+    end: date
+    error: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillReport:
+    requested_start: date
+    requested_end: date
+    results: tuple[IngestionSummary, ...]
+    failures: tuple[BackfillFailure, ...]
+    skipped_existing: int
+    skipped_non_sessions: int
+
+    def as_dict(self, *, compact: bool = False) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "requested_start": self.requested_start.isoformat(),
+            "requested_end": self.requested_end.isoformat(),
+            "artifact_count": len(self.results),
+            "failure_count": len(self.failures),
+            "skipped_existing": self.skipped_existing,
+            "skipped_non_sessions": self.skipped_non_sessions,
+            "failures": [
+                {
+                    "start": item.start.isoformat(),
+                    "end": item.end.isoformat(),
+                    "error": item.error,
+                }
+                for item in self.failures
+            ],
+            "results": [
+                (
+                    {
+                        "source_date": item.source_date.isoformat(),
+                        "artifact_type": item.artifact_type,
+                        "status": item.status,
+                        "rows_parsed": item.rows_parsed,
+                        "inserted": item.inserted,
+                        "unchanged": item.unchanged,
+                        "rejected": item.rejected,
+                        "conflicts": item.conflicts,
+                        "warnings": item.warnings,
+                        "checksum": item.checksum,
+                        "total_ms": item.total_ms,
+                    }
+                    if compact
+                    else item.as_dict()
+                )
+                for item in self.results
+            ],
+        }
+        return payload
 
 
 @dataclass(slots=True)
@@ -172,7 +232,19 @@ def _price_values_equal(existing: DailyPrice, incoming: NormalizedPrice) -> bool
     )
 
 
+def _index_price_values_equal(
+    existing: IndexDailyPrice, incoming: NormalizedIndexPrice
+) -> bool:
+    return (
+        Decimal(existing.open) == incoming.open
+        and Decimal(existing.high) == incoming.high
+        and Decimal(existing.low) == incoming.low
+        and Decimal(existing.close) == incoming.close
+    )
+
+
 ParserResult = ParseResult[object]
+NIFTY_HISTORY_URL = "https://www.niftyindices.com/BackPage/getHistoricaldatatabletoString"
 
 
 class NseIngestionService:
@@ -218,6 +290,91 @@ class NseIngestionService:
             fetched_at=downloaded.fetched_at,
         )
 
+    def fetch_eod(
+        self,
+        source_date: date,
+        *,
+        dry_run: bool = False,
+        client_factory: Callable[[], OfficialHttpClient] = OfficialHttpClient,
+    ) -> IngestionSummary:
+        return self.fetch_and_import(
+            eod_artifact_type(source_date),
+            source_date,
+            dry_run=dry_run,
+            client_factory=client_factory,
+        )
+
+    def fetch_index_history(
+        self,
+        start: date,
+        end: date,
+        *,
+        dry_run: bool = False,
+        client_factory: Callable[[], OfficialHttpClient] = OfficialHttpClient,
+    ) -> IngestionSummary:
+        if start > end:
+            raise ValueError("start must be on or before end")
+        if end > date.today():
+            raise ValueError("end cannot be in the future")
+        if (end - start).days > 365:
+            raise ValueError("one index-history request is limited to 366 calendar days")
+        with client_factory() as client:
+            return self._fetch_index_history_with_client(
+                start, end, dry_run=dry_run, client=client
+            )
+
+    def _fetch_index_history_with_client(
+        self,
+        start: date,
+        end: date,
+        *,
+        dry_run: bool,
+        client: OfficialHttpClient,
+    ) -> IngestionSummary:
+        cinfo = (
+            "{'name':'NIFTY 200',"
+            f"'startDate':'{start.strftime('%m/%d/%Y')}',"
+            f"'endDate':'{end.strftime('%m/%d/%Y')}',"
+            "'indexName':'NIFTY 200'}"
+        )
+        downloaded = client.post_json(NIFTY_HISTORY_URL, {"cinfo": cinfo})
+        artifact = ArtifactBytes(
+            file_name=f"nifty200_{start:%Y%m%d}_{end:%Y%m%d}.json",
+            content=downloaded.content,
+            source_locator=NIFTY_HISTORY_URL,
+        )
+        return self.import_artifact(
+            ArtifactType.NIFTY_200_INDEX_HISTORY,
+            end,
+            artifact,
+            dry_run=dry_run,
+            fetched_at=downloaded.fetched_at,
+            requested_start=start,
+            requested_end=end,
+        )
+
+    def import_index_history_local(
+        self,
+        start: date,
+        end: date,
+        file_name: str | Path,
+        *,
+        dry_run: bool = False,
+    ) -> IngestionSummary:
+        if start > end:
+            raise ValueError("start must be on or before end")
+        if end > date.today():
+            raise ValueError("end cannot be in the future")
+        artifact = self.store.read_inbox(file_name)
+        return self.import_artifact(
+            ArtifactType.NIFTY_200_INDEX_HISTORY,
+            end,
+            artifact,
+            dry_run=dry_run,
+            requested_start=start,
+            requested_end=end,
+        )
+
     def backfill(
         self,
         start: date,
@@ -226,11 +383,90 @@ class NseIngestionService:
         dry_run: bool = False,
         client_factory: Callable[[], OfficialHttpClient] = OfficialHttpClient,
     ) -> list[IngestionSummary]:
+        return list(
+            self._backfill_eod(
+                start,
+                end,
+                dry_run=dry_run,
+                client_factory=client_factory,
+                continue_on_error=False,
+            ).results
+        )
+
+    def backfill_report(
+        self,
+        start: date,
+        end: date,
+        *,
+        dry_run: bool = False,
+        client_factory: Callable[[], OfficialHttpClient] = OfficialHttpClient,
+    ) -> BackfillReport:
+        return self._backfill_eod(
+            start,
+            end,
+            dry_run=dry_run,
+            client_factory=client_factory,
+            continue_on_error=True,
+        )
+
+    def annual_backfill_report(
+        self,
+        start: date,
+        end: date,
+        *,
+        dry_run: bool = False,
+        client_factory: Callable[[], OfficialHttpClient] = OfficialHttpClient,
+    ) -> BackfillReport:
+        """Run a resumable year-sized request as independently committed 93-day chunks."""
+        if start > end:
+            raise ValueError("start must be on or before end")
+        if (end - start).days > 365:
+            raise ValueError("one annual backfill command is limited to 366 calendar days")
+        results: list[IngestionSummary] = []
+        failures: list[BackfillFailure] = []
+        skipped_existing = 0
+        skipped_non_sessions = 0
+        current = start
+        while current <= end:
+            chunk_end = min(end, current + timedelta(days=92))
+            report = self._backfill_eod(
+                current,
+                chunk_end,
+                dry_run=dry_run,
+                client_factory=client_factory,
+                continue_on_error=True,
+            )
+            results.extend(report.results)
+            failures.extend(report.failures)
+            skipped_existing += report.skipped_existing
+            skipped_non_sessions += report.skipped_non_sessions
+            current = chunk_end + timedelta(days=1)
+        return BackfillReport(
+            requested_start=start,
+            requested_end=end,
+            results=tuple(results),
+            failures=tuple(failures),
+            skipped_existing=skipped_existing,
+            skipped_non_sessions=skipped_non_sessions,
+        )
+
+    def _backfill_eod(
+        self,
+        start: date,
+        end: date,
+        *,
+        dry_run: bool,
+        client_factory: Callable[[], OfficialHttpClient],
+        continue_on_error: bool,
+    ) -> BackfillReport:
         if start > end:
             raise ValueError("start must be on or before end")
         if (end - start).days > 92:
             raise ValueError("one backfill command is limited to 93 calendar days")
         results: list[IngestionSummary] = []
+        failures: list[BackfillFailure] = []
+        skipped_existing = 0
+        skipped_non_sessions = 0
         confirmed_holidays = set(
             self.session.scalars(
                 select(TradingCalendar.trading_date).where(
@@ -240,36 +476,144 @@ class NseIngestionService:
                 )
             )
         )
+        benchmark_bounds = self.session.execute(
+            select(
+                func.min(IndexDailyPrice.trading_date),
+                func.max(IndexDailyPrice.trading_date),
+            )
+            .join(MarketIndex, MarketIndex.id == IndexDailyPrice.index_id)
+            .where(
+                MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                MarketIndex.symbol == "NIFTY200",
+                IndexDailyPrice.source_mode == "OFFICIAL",
+            )
+        ).one()
+        benchmark_sessions: set[date] | None = None
+        if (
+            benchmark_bounds[0] is not None
+            and benchmark_bounds[1] is not None
+            and benchmark_bounds[0] <= start
+            and benchmark_bounds[1] >= end
+        ):
+            benchmark_sessions = set(
+                self.session.scalars(
+                    select(IndexDailyPrice.trading_date)
+                    .join(MarketIndex, MarketIndex.id == IndexDailyPrice.index_id)
+                    .where(
+                        MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                        MarketIndex.symbol == "NIFTY200",
+                        IndexDailyPrice.source_mode == "OFFICIAL",
+                        IndexDailyPrice.trading_date.between(start, end),
+                    )
+                )
+            )
         current = start
         with client_factory() as client:
             while current <= end:
-                if current.weekday() < 5 and current not in confirmed_holidays:
+                if (
+                    current not in benchmark_sessions
+                    if benchmark_sessions is not None
+                    else current.weekday() >= 5 or current in confirmed_holidays
+                ):
+                    skipped_non_sessions += 1
+                else:
+                    artifact_type = eod_artifact_type(current)
                     existing = self.session.scalar(
                         select(SourceArtifact.id).where(
                             SourceArtifact.provider == "OFFICIAL_NSE_PUBLIC",
-                            SourceArtifact.artifact_type == ArtifactType.EOD_BHAVCOPY.value,
+                            SourceArtifact.artifact_type == artifact_type.value,
                             SourceArtifact.source_date == current,
                             SourceArtifact.parse_status.in_(("SUCCEEDED", "PARTIAL")),
                         )
                     )
                     if existing is None or dry_run:
-                        url = public_artifact_url(ArtifactType.EOD_BHAVCOPY, current)
-                        downloaded = client.fetch(url)
+                        url = public_artifact_url(artifact_type, current)
+                        try:
+                            downloaded = client.fetch(url)
+                            results.append(
+                                self.import_artifact(
+                                    artifact_type,
+                                    current,
+                                    ArtifactBytes(
+                                        file_name=Path(urlparse(downloaded.source_url).path).name,
+                                        content=downloaded.content,
+                                        source_locator=url,
+                                    ),
+                                    dry_run=dry_run,
+                                    fetched_at=downloaded.fetched_at,
+                                )
+                            )
+                        except OfficialSourceError as exc:
+                            if not continue_on_error:
+                                raise
+                            failures.append(
+                                BackfillFailure(current, current, str(exc)[:500])
+                            )
+                    else:
+                        skipped_existing += 1
+                current += timedelta(days=1)
+        return BackfillReport(
+            requested_start=start,
+            requested_end=end,
+            results=tuple(results),
+            failures=tuple(failures),
+            skipped_existing=skipped_existing,
+            skipped_non_sessions=skipped_non_sessions,
+        )
+
+    def index_history_backfill(
+        self,
+        start: date,
+        end: date,
+        *,
+        dry_run: bool = False,
+        client_factory: Callable[[], OfficialHttpClient] = OfficialHttpClient,
+    ) -> BackfillReport:
+        if start > end:
+            raise ValueError("start must be on or before end")
+        if end > date.today():
+            raise ValueError("end cannot be in the future")
+        results: list[IngestionSummary] = []
+        failures: list[BackfillFailure] = []
+        skipped_existing = 0
+        current = start
+        with client_factory() as client:
+            while current <= end:
+                chunk_end = min(end, date(current.year, 12, 31))
+                existing = self.session.scalar(
+                    select(SourceArtifact.id).where(
+                        SourceArtifact.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                        SourceArtifact.artifact_type
+                        == ArtifactType.NIFTY_200_INDEX_HISTORY.value,
+                        SourceArtifact.source_date == chunk_end,
+                        SourceArtifact.parse_status.in_(("SUCCEEDED", "PARTIAL")),
+                    )
+                )
+                if existing is not None and not dry_run:
+                    skipped_existing += 1
+                else:
+                    try:
                         results.append(
-                            self.import_artifact(
-                                ArtifactType.EOD_BHAVCOPY,
+                            self._fetch_index_history_with_client(
                                 current,
-                                ArtifactBytes(
-                                    file_name=Path(urlparse(downloaded.source_url).path).name,
-                                    content=downloaded.content,
-                                    source_locator=url,
-                                ),
+                                chunk_end,
                                 dry_run=dry_run,
-                                fetched_at=downloaded.fetched_at,
+                                client=client,
                             )
                         )
-                current += timedelta(days=1)
-        return results
+                    except OfficialSourceError as exc:
+                        failures.append(
+                            BackfillFailure(current, chunk_end, str(exc)[:500])
+                        )
+                current = chunk_end + timedelta(days=1)
+        return BackfillReport(
+            requested_start=start,
+            requested_end=end,
+            results=tuple(results),
+            failures=tuple(failures),
+            skipped_existing=skipped_existing,
+            skipped_non_sessions=0,
+        )
 
     def import_artifact(
         self,
@@ -279,10 +623,18 @@ class NseIngestionService:
         *,
         dry_run: bool = False,
         fetched_at: datetime | None = None,
+        requested_start: date | None = None,
+        requested_end: date | None = None,
     ) -> IngestionSummary:
         started = time.perf_counter()
         if source_date > date.today():
             raise ValueError("source_date cannot be in the future")
+        requested_start = requested_start or source_date
+        requested_end = requested_end or source_date
+        if requested_start > requested_end:
+            raise ValueError("requested_start must be on or before requested_end")
+        if requested_end > date.today():
+            raise ValueError("requested_end cannot be in the future")
         definition = SOURCE_DEFINITIONS[artifact_type]
         checksum = artifact.sha256
         normalized_fingerprint = _fingerprint(
@@ -290,6 +642,8 @@ class NseIngestionService:
                 "provider": definition.provider.value,
                 "artifact_type": artifact_type.value,
                 "source_date": source_date,
+                "requested_start": requested_start,
+                "requested_end": requested_end,
                 "sha256": checksum,
                 "parser_version": definition.parser_version,
             }
@@ -329,7 +683,13 @@ class NseIngestionService:
 
         parse_started = time.perf_counter()
         try:
-            parsed = self._parse(artifact_type, source_date, artifact)
+            parsed = self._parse(
+                artifact_type,
+                source_date,
+                artifact,
+                requested_start=requested_start,
+                requested_end=requested_end,
+            )
         except (ArtifactValidationError, ArtifactSchemaDriftError, ValueError) as exc:
             if dry_run:
                 raise
@@ -347,7 +707,15 @@ class NseIngestionService:
 
         if dry_run:
             persistence_started = time.perf_counter()
-            plan = self._apply(artifact_type, source_date, parsed, None, None, mutate=False)
+            plan = self._apply(
+                artifact_type,
+                source_date,
+                parsed,
+                None,
+                None,
+                available_at=None,
+                mutate=False,
+            )
             persistence_ms = (time.perf_counter() - persistence_started) * 1_000
             issues = tuple(parsed.issues) + tuple(plan.issues or ())
             return IngestionSummary(
@@ -394,13 +762,14 @@ class NseIngestionService:
             )
 
         persistence_started = time.perf_counter()
+        imported_at = datetime.now(UTC)
         run = DataIngestionRun(
             dataset_code=f"nse_{artifact_type.value.lower()}",
             dataset_version=source_date.isoformat(),
             provider=definition.provider.value,
             status=IngestionStatus.RUNNING.value,
-            requested_start=source_date,
-            requested_end=source_date,
+            requested_start=requested_start,
+            requested_end=requested_end,
             parser_version=definition.parser_version,
             dry_run=False,
         )
@@ -412,7 +781,7 @@ class NseIngestionService:
             original_file_name=artifact.file_name,
             source_locator=artifact.source_locator,
             fetched_at=fetched_at,
-            imported_at=datetime.now(UTC),
+            imported_at=imported_at,
             sha256=checksum,
             byte_size=len(artifact.content),
             parser_code=definition.parser_code,
@@ -420,7 +789,11 @@ class NseIngestionService:
             source_schema_version=None,
             normalized_fingerprint=normalized_fingerprint,
             parse_status="FAILED",
-            artifact_metadata={"mode": "FETCH" if fetched_at else "LOCAL_IMPORT"},
+            artifact_metadata={
+                "mode": "FETCH" if fetched_at else "LOCAL_IMPORT",
+                "requested_start": requested_start.isoformat(),
+                "requested_end": requested_end.isoformat(),
+            },
         )
         self.session.add(run)
         self.session.flush()
@@ -437,6 +810,7 @@ class NseIngestionService:
                 parsed,
                 source_artifact.id,
                 run.id,
+                available_at=fetched_at or imported_at,
                 mutate=True,
             )
             issues = tuple(parsed.issues) + tuple(plan.issues or ())
@@ -498,11 +872,20 @@ class NseIngestionService:
         )
 
     def _parse(
-        self, artifact_type: ArtifactType, source_date: date, artifact: ArtifactBytes
+        self,
+        artifact_type: ArtifactType,
+        source_date: date,
+        artifact: ArtifactBytes,
+        *,
+        requested_start: date,
+        requested_end: date,
     ) -> ParserResult:
         if artifact_type == ArtifactType.SECURITY_MASTER:
             return parse_security_master(artifact)
-        if artifact_type == ArtifactType.EOD_BHAVCOPY:
+        if artifact_type in {
+            ArtifactType.EOD_BHAVCOPY,
+            ArtifactType.LEGACY_EOD_BHAVCOPY,
+        }:
             return parse_bhavcopy(artifact, expected_date=source_date)
         if artifact_type in {
             ArtifactType.NIFTY_200_CONSTITUENTS,
@@ -513,6 +896,12 @@ class NseIngestionService:
             return parse_corporate_actions(artifact)
         if artifact_type == ArtifactType.TRADING_HOLIDAYS:
             return parse_holidays(artifact)
+        if artifact_type == ArtifactType.NIFTY_200_INDEX_HISTORY:
+            return parse_index_history(
+                artifact,
+                requested_start=requested_start,
+                requested_end=requested_end,
+            )
         raise ValueError("Unsupported artifact type")
 
     def _apply(
@@ -523,12 +912,23 @@ class NseIngestionService:
         artifact_id: UUID | None,
         run_id: UUID | None,
         *,
+        available_at: datetime | None,
         mutate: bool,
     ) -> _WritePlan:
         if artifact_type == ArtifactType.SECURITY_MASTER:
             return self._apply_securities(parsed.rows, artifact_id, run_id, mutate=mutate)
-        if artifact_type == ArtifactType.EOD_BHAVCOPY:
-            return self._apply_prices(parsed.rows, source_date, artifact_id, run_id, mutate=mutate)
+        if artifact_type in {
+            ArtifactType.EOD_BHAVCOPY,
+            ArtifactType.LEGACY_EOD_BHAVCOPY,
+        }:
+            return self._apply_prices(
+                artifact_type,
+                parsed.rows,
+                source_date,
+                artifact_id,
+                run_id,
+                mutate=mutate,
+            )
         if artifact_type in {
             ArtifactType.NIFTY_200_CONSTITUENTS,
             ArtifactType.NIFTY_500_CONSTITUENTS,
@@ -540,6 +940,14 @@ class NseIngestionService:
             return self._apply_actions(parsed.rows, artifact_id, run_id, mutate=mutate)
         if artifact_type == ArtifactType.TRADING_HOLIDAYS:
             return self._apply_holidays(parsed.rows, artifact_id, run_id, mutate=mutate)
+        if artifact_type == ArtifactType.NIFTY_200_INDEX_HISTORY:
+            return self._apply_index_prices(
+                parsed.rows,
+                artifact_id,
+                run_id,
+                available_at=available_at,
+                mutate=mutate,
+            )
         raise ValueError("Unsupported artifact type")
 
     def _apply_securities(
@@ -662,6 +1070,7 @@ class NseIngestionService:
 
     def _apply_prices(
         self,
+        artifact_type: ArtifactType,
         rows: Iterable[object],
         source_date: date,
         artifact_id: UUID | None,
@@ -714,7 +1123,11 @@ class NseIngestionService:
                         close=row.close,
                         volume=row.volume,
                         traded_value=row.traded_value,
-                        source="NSE_CM_UDIFF",
+                        source=(
+                            "NSE_CM_LEGACY_BHAVCOPY"
+                            if artifact_type == ArtifactType.LEGACY_EOD_BHAVCOPY
+                            else "NSE_CM_UDIFF"
+                        ),
                         data_origin=DataOrigin.OFFICIAL_NSE_PUBLIC.value,
                         source_artifact_id=artifact_id,
                         ingestion_run_id=run_id,
@@ -878,6 +1291,104 @@ class NseIngestionService:
                     for security in resolved
                 ]
             )
+        return plan
+
+    def _apply_index_prices(
+        self,
+        rows: Iterable[object],
+        artifact_id: UUID | None,
+        run_id: UUID | None,
+        *,
+        available_at: datetime | None,
+        mutate: bool,
+    ) -> _WritePlan:
+        typed = tuple(row for row in rows if isinstance(row, NormalizedIndexPrice))
+        plan = _WritePlan()
+        market_index = self.session.scalar(
+            select(MarketIndex).where(
+                MarketIndex.provider == "OFFICIAL_NSE_INDICES_PUBLIC",
+                MarketIndex.symbol == "NIFTY200",
+            )
+        )
+        if market_index is None and mutate:
+            market_index = MarketIndex(
+                name="NIFTY 200",
+                symbol="NIFTY200",
+                provider="OFFICIAL_NSE_INDICES_PUBLIC",
+                exchange="NSE",
+            )
+            self.session.add(market_index)
+            self.session.flush()
+        if market_index is None:
+            plan.inserted = len(typed)
+            return plan
+
+        dates = {row.trading_date for row in typed}
+        existing = {
+            row.trading_date: row
+            for row in self.session.scalars(
+                select(IndexDailyPrice).where(
+                    IndexDailyPrice.index_id == market_index.id,
+                    IndexDailyPrice.source_mode == "OFFICIAL",
+                    IndexDailyPrice.trading_date.in_(dates),
+                )
+            )
+        }
+        pending: list[IndexDailyPrice] = []
+        for row in typed:
+            current = existing.get(row.trading_date)
+            if current is None:
+                plan.inserted += 1
+                if mutate:
+                    if available_at is None:
+                        raise ValueError("Official index history requires a knowledge timestamp")
+                    pending.append(
+                        IndexDailyPrice(
+                            index_id=market_index.id,
+                            trading_date=row.trading_date,
+                            open=row.open,
+                            high=row.high,
+                            low=row.low,
+                            close=row.close,
+                            source_mode="OFFICIAL",
+                            source="NSE_INDICES_HISTORICAL",
+                            available_at=available_at,
+                            source_artifact_id=artifact_id,
+                            ingestion_run_id=run_id,
+                        )
+                    )
+                continue
+            if _index_price_values_equal(current, row):
+                plan.unchanged += 1
+                continue
+            plan.issue(
+                IssueSeverity.ERROR,
+                "INDEX_PRICE_CONFLICT",
+                "Existing official NIFTY 200 price was not overwritten",
+                row_key=row.trading_date.isoformat(),
+                metadata={
+                    "existing_hash": _fingerprint(
+                        {
+                            "open": str(current.open),
+                            "high": str(current.high),
+                            "low": str(current.low),
+                            "close": str(current.close),
+                        }
+                    ),
+                    "incoming_hash": _fingerprint(
+                        {
+                            "open": str(row.open),
+                            "high": str(row.high),
+                            "low": str(row.low),
+                            "close": str(row.close),
+                        }
+                    ),
+                },
+                rejected=True,
+                conflict=True,
+            )
+        if mutate:
+            self.session.add_all(pending)
         return plan
 
     def _apply_actions(

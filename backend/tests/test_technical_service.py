@@ -34,6 +34,40 @@ def test_requested_range_uses_pre_start_history_for_sma_200(db):
     assert response.dataset.dataset_version == "v1.2.3"
 
 
+def test_official_equity_run_is_preferred_without_changing_feature_fingerprint(db):
+    security = seed_security(db, rows=2)
+    service = TechnicalFeatureService(db)
+    before = service.compute(
+        security,
+        start_date=None,
+        end_date=date(2024, 1, 2),
+        adjustment_policy="RAW",
+        as_of=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    db.add(
+        DataIngestionRun(
+            dataset_code="nse_eod_bhavcopy",
+            dataset_version="2026-09-18",
+            provider="OFFICIAL_NSE_PUBLIC",
+            status="PARTIAL",
+            completed_at=datetime(2026, 9, 20, tzinfo=UTC),
+            records_written=2640,
+        )
+    )
+    db.commit()
+
+    after = service.compute(
+        security,
+        start_date=None,
+        end_date=date(2024, 1, 2),
+        adjustment_policy="RAW",
+        as_of=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    assert after.dataset.dataset_code == "nse_eod_bhavcopy"
+    assert after.dataset.provider == "OFFICIAL_NSE_PUBLIC"
+    assert after.dataset.fingerprint == before.dataset.fingerprint
+
+
 def test_missing_expected_session_warns_without_inventing_a_row(db):
     security = seed_security(db, rows=10, missing_index=5)
     response = TechnicalFeatureService(db).compute(security, start_date=None, end_date=date(2024, 1, 10), adjustment_policy="RAW", as_of=datetime(2025, 1, 1, tzinfo=UTC))

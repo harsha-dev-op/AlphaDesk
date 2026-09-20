@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -7,7 +8,15 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Generic, TypeVar
 
-from app.ingestion.nse.artifacts import ArtifactBytes, ArtifactSchemaDriftError, csv_records
+from app.ingestion.nse.artifacts import (
+    MAX_COMPRESSED_BYTES,
+    MAX_CSV_ROWS,
+    ArtifactBytes,
+    ArtifactSchemaDriftError,
+    ArtifactValidationError,
+    csv_records,
+    validate_file_name,
+)
 from app.ingestion.nse.definitions import ArtifactType, IssueSeverity, SOURCE_DEFINITIONS
 
 
@@ -17,6 +26,7 @@ SUPPORTED_EQUITY_SERIES = frozenset({"EQ"})
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9&._-]{0,31}$")
 ISIN_PATTERN = re.compile(r"^IN[A-Z0-9]{10}$")
 MAX_PRICE = Decimal("99999999999999.9999")
+MAX_INDEX_PRICE = Decimal("99999999999999.999999")
 MAX_TRADED_VALUE = Decimal("9999999999999999999999.99")
 
 
@@ -98,6 +108,15 @@ class NormalizedPrice:
 
 
 @dataclass(frozen=True, slots=True)
+class NormalizedIndexPrice:
+    trading_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedConstituent:
     symbol: str
     series: str
@@ -149,7 +168,15 @@ def _resolve_headers(
 
 
 def _parse_date(value: str, field_name: str) -> date:
-    for pattern in ("%Y-%m-%d", "%d-%b-%Y", "%d-%m-%Y", "%d/%m/%Y", "%Y%m%d"):
+    for pattern in (
+        "%Y-%m-%d",
+        "%d-%b-%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%Y%m%d",
+    ):
         try:
             return datetime.strptime(value.strip(), pattern).date()
         except ValueError:
@@ -312,7 +339,7 @@ def parse_security_master(artifact: ArtifactBytes) -> ParseResult[NormalizedSecu
 
 
 PRICE_ALIASES = {
-    "trade_date": ("TradDt", "Trade Date", "Date"),
+    "trade_date": ("TradDt", "Trade Date", "Date", "TIMESTAMP"),
     "segment": ("Sgmt", "Segment"),
     "symbol": ("TckrSymb", "Symbol"),
     "series": ("SctySrs", "Series"),
@@ -321,8 +348,8 @@ PRICE_ALIASES = {
     "high": ("HghPric", "High Price", "High"),
     "low": ("LwPric", "Low Price", "Low"),
     "close": ("ClsPric", "Close Price", "Close"),
-    "volume": ("TtlTradgVol", "Total Traded Quantity", "Volume"),
-    "traded_value": ("TtlTrfVal", "Turnover", "Traded Value"),
+    "volume": ("TtlTradgVol", "Total Traded Quantity", "Volume", "TOTTRDQTY"),
+    "traded_value": ("TtlTrfVal", "Turnover", "Traded Value", "TOTTRDVAL"),
 }
 
 
@@ -431,6 +458,156 @@ def parse_bhavcopy(
                 traded_value=traded_value,
             )
         )
+    return ParseResult(
+        rows=tuple(output),
+        issues=tuple(issues.items),
+        source_row_count=len(source_rows),
+        rejected_row_count=issues.rejected_count,
+        warning_count=issues.warning_count,
+    )
+
+
+INDEX_HISTORY_ALIASES = {
+    "index_name": ("INDEX_NAME", "Index Name", "Index"),
+    "trade_date": ("HistoricalDate", "Date", "Trade Date"),
+    "open": ("OPEN", "Open"),
+    "high": ("HIGH", "High"),
+    "low": ("LOW", "Low"),
+    "close": ("CLOSE", "Close"),
+}
+
+
+def _index_history_records(
+    artifact: ArtifactBytes,
+) -> tuple[list[str], list[tuple[int, dict[str, str]]]]:
+    """Read either the official report JSON response or its manual CSV export."""
+    validate_file_name(artifact.file_name)
+    if artifact.file_name.casefold().endswith((".csv", ".csv.gz", ".csv.zip")):
+        return csv_records(artifact)
+    if not artifact.file_name.casefold().endswith(".json"):
+        raise ArtifactValidationError("Index history must be an official JSON or CSV artifact")
+    if not artifact.content or len(artifact.content) > MAX_COMPRESSED_BYTES:
+        raise ArtifactValidationError("Artifact is empty or exceeds the compressed-size ceiling")
+    try:
+        decoded: object = json.loads(artifact.content.decode("utf-8-sig"))
+        if isinstance(decoded, str):
+            decoded = json.loads(decoded)
+        if isinstance(decoded, dict):
+            for key in ("d", "data", "result", "Data"):
+                if key in decoded:
+                    decoded = decoded[key]
+                    if isinstance(decoded, str):
+                        decoded = json.loads(decoded)
+                    break
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArtifactValidationError("Index-history JSON is malformed") from exc
+    if not isinstance(decoded, list):
+        raise ArtifactSchemaDriftError("Index-history JSON does not contain a row array")
+    if len(decoded) > MAX_CSV_ROWS:
+        raise ArtifactValidationError("Index-history row-count ceiling exceeded")
+    headers: list[str] = []
+    seen_headers: set[str] = set()
+    rows: list[tuple[int, dict[str, str]]] = []
+    for row_number, item in enumerate(decoded, start=1):
+        if not isinstance(item, dict) or any(not isinstance(key, str) for key in item):
+            raise ArtifactValidationError(
+                f"Index-history JSON row {row_number} is not an object with string keys"
+            )
+        normalized: dict[str, str] = {}
+        for key, value in item.items():
+            if key not in seen_headers:
+                seen_headers.add(key)
+                headers.append(key)
+            normalized[key] = "" if value is None else str(value).strip()
+        rows.append((row_number, normalized))
+    if not headers:
+        raise ArtifactSchemaDriftError("Index-history artifact has no columns")
+    return headers, rows
+
+
+def parse_index_history(
+    artifact: ArtifactBytes,
+    *,
+    expected_index: str = "NIFTY 200",
+    requested_start: date | None = None,
+    requested_end: date | None = None,
+) -> ParseResult[NormalizedIndexPrice]:
+    headers, source_rows = _index_history_records(artifact)
+    columns = _resolve_headers(
+        headers,
+        INDEX_HISTORY_ALIASES,
+        required={"index_name", "trade_date", "open", "high", "low", "close"},
+    )
+    expected_identity = _normalized_header(expected_index)
+    output: list[NormalizedIndexPrice] = []
+    issues = _IssueCollector()
+    seen: set[date] = set()
+    today = date.today()
+    for row_number, row in source_rows:
+        raw_date = row.get(columns["trade_date"], "")
+        try:
+            index_name = row.get(columns["index_name"], "").strip()
+            if _normalized_header(index_name) != expected_identity:
+                raise ValueError("index identity is not NIFTY 200")
+            trading_date = _parse_date(raw_date, "index date")
+            if trading_date > today:
+                raise ValueError("index date cannot be in the future")
+            if requested_start is not None and trading_date < requested_start:
+                raise ValueError("index date is before the requested range")
+            if requested_end is not None and trading_date > requested_end:
+                raise ValueError("index date is after the requested range")
+            open_ = _decimal(row.get(columns["open"], ""), "open")
+            high = _decimal(row.get(columns["high"], ""), "high")
+            low = _decimal(row.get(columns["low"], ""), "low")
+            close = _decimal(row.get(columns["close"], ""), "close")
+            for field_name, value in (
+                ("open", open_),
+                ("high", high),
+                ("low", low),
+                ("close", close),
+            ):
+                _validate_numeric_storage(
+                    value, field_name, maximum=MAX_INDEX_PRICE, scale=6
+                )
+            if any(value <= 0 for value in (open_, high, low, close)):
+                raise ValueError("index OHLC values must be positive")
+            if high < low:
+                raise ValueError("index high is below low")
+            if not low <= open_ <= high:
+                raise ValueError("index open is outside the low/high range")
+            if not low <= close <= high:
+                raise ValueError("index close is outside the low/high range")
+        except ValueError as exc:
+            issues.add(
+                IssueSeverity.ERROR,
+                "INVALID_INDEX_OHLC_ROW",
+                str(exc),
+                row_number=row_number,
+                row_key=raw_date or None,
+                rejected=True,
+            )
+            continue
+        if trading_date in seen:
+            issues.add(
+                IssueSeverity.ERROR,
+                "DUPLICATE_INDEX_PRICE",
+                "Duplicate NIFTY 200 date in index-history artifact",
+                row_number=row_number,
+                row_key=trading_date.isoformat(),
+                rejected=True,
+            )
+            continue
+        seen.add(trading_date)
+        output.append(
+            NormalizedIndexPrice(
+                trading_date=trading_date,
+                open=open_,
+                high=high,
+                low=low,
+                close=close,
+            )
+        )
+    output.sort(key=lambda item: item.trading_date)
     return ParseResult(
         rows=tuple(output),
         issues=tuple(issues.items),

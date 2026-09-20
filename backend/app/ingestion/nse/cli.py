@@ -66,11 +66,35 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_parser.add_argument("--to", dest="end", required=True, type=_date)
     backfill_parser.add_argument("--dry-run", action="store_true")
 
+    annual_backfill_parser = subparsers.add_parser(
+        "backfill-year",
+        help="Fetch a resumable year-sized EOD range in bounded 93-day chunks",
+    )
+    annual_backfill_parser.add_argument("--from", dest="start", required=True, type=_date)
+    annual_backfill_parser.add_argument("--to", dest="end", required=True, type=_date)
+    annual_backfill_parser.add_argument("--dry-run", action="store_true")
+
     constituents_parser = subparsers.add_parser("constituents", help="Sync a current official index snapshot")
     constituents_parser.add_argument("--index", choices=("NIFTY_200", "NIFTY_500"), required=True)
     constituents_parser.add_argument("--as-of", required=True, type=_date)
     constituents_parser.add_argument("--file")
     constituents_parser.add_argument("--dry-run", action="store_true")
+
+    index_history_parser = subparsers.add_parser(
+        "index-history", help="Fetch/import one official NIFTY 200 history range"
+    )
+    index_history_parser.add_argument("--from", dest="start", required=True, type=_date)
+    index_history_parser.add_argument("--to", dest="end", required=True, type=_date)
+    index_history_parser.add_argument("--file")
+    index_history_parser.add_argument("--dry-run", action="store_true")
+
+    index_backfill_parser = subparsers.add_parser(
+        "index-history-backfill",
+        help="Fetch resumable calendar-year NIFTY 200 history chunks",
+    )
+    index_backfill_parser.add_argument("--from", dest="start", required=True, type=_date)
+    index_backfill_parser.add_argument("--to", dest="end", required=True, type=_date)
+    index_backfill_parser.add_argument("--dry-run", action="store_true")
 
     actions_parser = subparsers.add_parser("corporate-actions", help="Import an official corporate-actions CSV")
     actions_parser.add_argument("file")
@@ -134,17 +158,15 @@ def _run(args: argparse.Namespace) -> object:
                 )
             return result.as_dict()
         if args.command == "fetch-eod":
-            return service.fetch_and_import(
-                ArtifactType.EOD_BHAVCOPY, args.date, dry_run=args.dry_run
-            ).as_dict()
+            return service.fetch_eod(args.date, dry_run=args.dry_run).as_dict()
         if args.command == "backfill":
-            results = service.backfill(args.start, args.end, dry_run=args.dry_run)
-            return {
-                "requested_start": args.start,
-                "requested_end": args.end,
-                "artifact_count": len(results),
-                "results": [item.as_dict() for item in results],
-            }
+            return service.backfill_report(
+                args.start, args.end, dry_run=args.dry_run
+            ).as_dict(compact=True)
+        if args.command == "backfill-year":
+            return service.annual_backfill_report(
+                args.start, args.end, dry_run=args.dry_run
+            ).as_dict(compact=True)
         if args.command == "constituents":
             artifact_type = (
                 ArtifactType.NIFTY_200_CONSTITUENTS
@@ -160,6 +182,27 @@ def _run(args: argparse.Namespace) -> object:
                     artifact_type, args.as_of, dry_run=args.dry_run
                 )
             return result.as_dict()
+        if args.command == "index-history":
+            if args.file:
+                result = service.import_index_history_local(
+                    args.start,
+                    args.end,
+                    args.file,
+                    dry_run=args.dry_run,
+                )
+            else:
+                result = service.fetch_index_history(
+                    args.start,
+                    args.end,
+                    dry_run=args.dry_run,
+                )
+            return result.as_dict()
+        if args.command == "index-history-backfill":
+            return service.index_history_backfill(
+                args.start,
+                args.end,
+                dry_run=args.dry_run,
+            ).as_dict(compact=True)
         if args.command == "corporate-actions":
             return service.import_local(
                 ArtifactType.CORPORATE_ACTIONS,

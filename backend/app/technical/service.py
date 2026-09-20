@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.models import CorporateAction, DataIngestionRun, DailyPrice, Security, TradingCalendar
@@ -57,10 +57,21 @@ class TechnicalFeatureService:
         return datetime.combine(observation_date, close_time, tzinfo=MARKET_TIMEZONE)
 
     def _latest_successful_run(self) -> DataIngestionRun | None:
+        official_equity_codes = (
+            "nse_eod_bhavcopy",
+            "nse_legacy_eod_bhavcopy",
+        )
         return self.session.scalar(
             select(DataIngestionRun)
-            .where(DataIngestionRun.status == "SUCCESS")
-            .order_by(DataIngestionRun.completed_at.desc(), DataIngestionRun.started_at.desc())
+            .where(DataIngestionRun.status.in_(("SUCCEEDED", "SUCCESS", "PARTIAL")))
+            .order_by(
+                case(
+                    (DataIngestionRun.dataset_code.in_(official_equity_codes), 0),
+                    else_=1,
+                ),
+                DataIngestionRun.completed_at.desc(),
+                DataIngestionRun.started_at.desc(),
+            )
             .limit(1)
         )
 

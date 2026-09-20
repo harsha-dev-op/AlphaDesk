@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from uuid import UUID
 
 
 def canonical(value: object) -> object:
@@ -16,6 +17,8 @@ def canonical(value: object) -> object:
         return value.astimezone(UTC).isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
     if isinstance(value, dict):
         return {str(key): canonical(item) for key, item in sorted(value.items())}
     if isinstance(value, (list, tuple)):

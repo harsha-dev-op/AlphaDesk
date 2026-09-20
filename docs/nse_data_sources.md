@@ -7,9 +7,11 @@ Audit date: 2026-09-14. Phase 8 uses only zero-cost files made public by NSE or 
 | AlphaDesk artifact | Official/public source | Expected form | Automation policy | Point-in-time limit |
 | --- | --- | --- | --- | --- |
 | `SECURITY_MASTER` | [NSE All Reports](https://www.nseindia.com/all-reports), `CM - MII - Security File` | `NSE_CM_security_DDMMYYYY.csv.gz` | One conservative direct request or local inbox import | Dated current master; it is not a complete symbol-history archive |
-| `EOD_BHAVCOPY` | [NSE All Reports](https://www.nseindia.com/all-reports), `CM-UDiFF Common Bhavcopy Final` | `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip` | Serial, bounded daily requests or local inbox import | Trade date is authoritative; download time is provenance, not exchange publication time |
+| `LEGACY_EOD_BHAVCOPY` | [NSE All Reports](https://www.nseindia.com/all-reports), historical `CM - Bhavcopy` | `cmDDMONYYYYbhav.csv.zip` before 2024-07-08 | Serial, bounded daily requests or local inbox import | Trade date is authoritative; download time is provenance, not exchange publication time |
+| `EOD_BHAVCOPY` | [NSE All Reports](https://www.nseindia.com/all-reports), `CM-UDiFF Common Bhavcopy Final` | `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip` from 2024-07-08 | Serial, bounded daily requests or local inbox import | Trade date is authoritative; download time is provenance, not exchange publication time |
 | `NIFTY_200_CONSTITUENTS` | [Nifty 200](https://www.niftyindices.com/indices/equity/broad-based-indices/nifty-200) | Current constituent CSV | Direct public file or local inbox import | Current snapshot only, effective from the explicitly supplied as-of date |
 | `NIFTY_500_CONSTITUENTS` | [Nifty 500](https://www.niftyindices.com/indices/equity/broad-based-indices/nifty-500) | Current constituent CSV | Direct public file or local inbox import | Current snapshot only, effective from the explicitly supplied as-of date |
+| `NIFTY_200_INDEX_HISTORY` | [NSE Indices Historical Data](https://www.niftyindices.com/reports/historical-data) | Historical NIFTY 200 OHLC JSON/CSV | Serial annual public-report requests or local inbox import | Historical rows use truthful retrieval/import availability; publication time is not inferred |
 | `CORPORATE_ACTIONS` | [NSE Corporate Actions](https://www.nseindia.com/companies-listing/corporate-filings-actions) | Operator-downloaded CSV | Local inbox import | Public table normally lacks a trustworthy publication timestamp; such rows are quarantined |
 | `TRADING_HOLIDAYS` | [NSE Trading Holidays](https://www.nseindia.com/resources/exchange-communication-holidays) | Operator-downloaded CSV | Local inbox import | Only explicitly listed dates become holidays; absence never proves closure |
 
@@ -26,7 +28,7 @@ NSE's [forms and formats page](https://www.nseindia.com/static/resources/forms-f
 
 `OfficialHttpClient` permits HTTPS only and restricts requests and redirects to `nseindia.com`, `nsearchives.nseindia.com`, and `niftyindices.com`. Requests are serial, identify AlphaDesk as a personal-research EOD importer, enforce a minimum spacing interval, use bounded timeouts and at most five attempts, cap `Retry-After` at 60 seconds, and retry only network failures, HTTP 429, and HTTP 5xx. HTTP 403 stops immediately with a local-import instruction; AlphaDesk never rotates identities, solves challenges, or bypasses provider controls.
 
-The normal test suite has no network access. Live checks are separate and operator initiated. A backfill invocation is capped at 93 calendar days, skips weekends and confirmed holidays, and resumes past already successful artifacts.
+The normal test suite has no network access. Live checks are separate and operator initiated. A backfill invocation is capped at 93 calendar days; the annual wrapper partitions work into those independently committed bounds. When a complete official benchmark range is present, its observation dates identify request sessions, including special weekends. Otherwise only weekdays not listed as official holidays are requested. A missing artifact never proves a closure.
 
 ## Data use and retention
 

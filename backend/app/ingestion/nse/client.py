@@ -4,7 +4,7 @@ import email.utils
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Callable
+from typing import Callable, Mapping
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -97,7 +97,7 @@ class OfficialHttpClient:
             follow_redirects=False,
             headers={
                 "User-Agent": "AlphaDesk/0.4 personal-research official-EOD-ingestion",
-                "Accept": "text/csv,application/zip,application/gzip,application/octet-stream",
+                "Accept": "text/csv,application/json,application/zip,application/gzip,application/octet-stream",
             },
         )
 
@@ -124,6 +124,39 @@ class OfficialHttpClient:
         *,
         allowed_content_types: frozenset[str] = DEFAULT_CONTENT_TYPES,
     ) -> DownloadedArtifact:
+        return self._request("GET", url, allowed_content_types=allowed_content_types)
+
+    def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, object],
+        *,
+        # The official historical-report endpoint currently labels its strict JSON
+        # response as text/html; the downstream parser still requires valid JSON.
+        allowed_content_types: frozenset[str] = frozenset(
+            {
+                "application/json",
+                "text/html",
+                "text/json",
+                "text/plain",
+            }
+        ),
+    ) -> DownloadedArtifact:
+        return self._request(
+            "POST",
+            url,
+            allowed_content_types=allowed_content_types,
+            json_payload=payload,
+        )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        allowed_content_types: frozenset[str],
+        json_payload: Mapping[str, object] | None = None,
+    ) -> DownloadedArtifact:
         validate_official_url(url)
         current_url = url
         redirects = 0
@@ -132,7 +165,8 @@ class OfficialHttpClient:
             attempt += 1
             self._space_request()
             try:
-                with self._client.stream("GET", current_url) as response:
+                request_kwargs = {"json": json_payload} if json_payload is not None else {}
+                with self._client.stream(method, current_url, **request_kwargs) as response:
                     if response.status_code in {301, 302, 303, 307, 308}:
                         location = response.headers.get("location")
                         if not location or redirects >= 3:

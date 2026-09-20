@@ -15,6 +15,7 @@ from app.models import (
     CorporateAction,
     DailyPrice,
     DataIngestionRun,
+    IndexDailyPrice,
     IndexMembership,
     IngestionIssue,
     MarketIndex,
@@ -23,6 +24,7 @@ from app.models import (
     TradingCalendar,
 )
 from app.repositories.indices import IndexRepository
+from app.services.data_sources import DataSourceCoverageService
 from app.services.quality import DataQualityService
 
 
@@ -81,6 +83,10 @@ def _constituent_artifact(symbols: list[str], *, name: str) -> ArtifactBytes:
         number = int(symbol[1:])
         lines.append(f"{symbol} Limited,Industry,{symbol},EQ,INE{number:09d}")
     return _artifact(name, "\n".join(lines) + "\n")
+
+
+def _index_history_artifact(*rows: str, name: str = "nifty200.json") -> ArtifactBytes:
+    return _artifact(name, "[" + ",".join(rows) + "]")
 
 
 def test_successful_security_artifact_is_transactional_idempotent_and_provenanced(db):
@@ -570,3 +576,184 @@ def test_backfill_is_bounded_resumable_and_skips_confirmed_non_sessions(db):
     assert all(result.status == "SUCCEEDED" for result in results)
     with pytest.raises(ValueError, match="93 calendar days"):
         service.backfill(date(2026, 1, 1), date(2026, 4, 5), client_factory=lambda: fake)
+
+
+def test_backfill_uses_official_benchmark_sessions_to_include_special_weekends(db):
+    db.add(_security("ALPHA", 1))
+    benchmark = MarketIndex(
+        name="NIFTY 200",
+        symbol="NIFTY200",
+        provider="OFFICIAL_NSE_INDICES_PUBLIC",
+        exchange="NSE",
+    )
+    db.add(benchmark)
+    db.flush()
+    for session_date in (date(2021, 1, 1), date(2021, 1, 2)):
+        db.add(
+            IndexDailyPrice(
+                index_id=benchmark.id,
+                trading_date=session_date,
+                open=Decimal("100"),
+                high=Decimal("110"),
+                low=Decimal("90"),
+                close=Decimal("105"),
+                source_mode="OFFICIAL",
+                source="FIXTURE",
+                available_at=datetime(2026, 9, 18, tzinfo=UTC),
+            )
+        )
+    db.commit()
+
+    class FakeClient:
+        def __init__(self):
+            self.days: list[date] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def fetch(self, url: str) -> DownloadedArtifact:
+            stamp = re.search(r"cm(\d{2})([A-Z]{3})(\d{4})bhav", url)
+            assert stamp
+            source_date = datetime.strptime("".join(stamp.groups()), "%d%b%Y").date()
+            self.days.append(source_date)
+            return DownloadedArtifact(
+                content=_price_csv(
+                    source_date,
+                    "ALPHA,EQ,INE000000001,100,110,90,105,12,1260",
+                ).content,
+                source_url=f"https://nsearchives.nseindia.com/fixture-{source_date}.csv",
+                fetched_at=datetime(2026, 9, 18, tzinfo=UTC),
+                content_type="application/zip",
+            )
+
+    fake = FakeClient()
+    report = _service(db).backfill_report(
+        date(2021, 1, 1),
+        date(2021, 1, 2),
+        client_factory=lambda: fake,
+    )
+    assert fake.days == [date(2021, 1, 1), date(2021, 1, 2)]
+    assert len(report.results) == 2
+    assert all(item.status == "SUCCEEDED" for item in report.results)
+    assert {
+        item.source
+        for item in db.scalars(select(DailyPrice).order_by(DailyPrice.trading_date))
+    } == {"NSE_CM_LEGACY_BHAVCOPY"}
+    assert report.skipped_non_sessions == 0
+
+
+def test_official_index_history_is_provenanced_idempotent_and_not_backdated(db):
+    fetched_at = datetime(2026, 9, 18, 7, 30, tzinfo=UTC)
+    artifact = _index_history_artifact(
+        '{"INDEX_NAME":"NIFTY 200","HistoricalDate":"01 Jan 2021",'
+        '"OPEN":"100","HIGH":"110","LOW":"90","CLOSE":"105"}',
+        '{"INDEX_NAME":"NIFTY 200","HistoricalDate":"04 Jan 2021",'
+        '"OPEN":"105","HIGH":"115","LOW":"100","CLOSE":"112"}',
+    )
+    service = _service(db)
+    first = service.import_artifact(
+        ArtifactType.NIFTY_200_INDEX_HISTORY,
+        date(2021, 1, 4),
+        artifact,
+        fetched_at=fetched_at,
+        requested_start=date(2021, 1, 1),
+        requested_end=date(2021, 1, 4),
+    )
+    second = service.import_artifact(
+        ArtifactType.NIFTY_200_INDEX_HISTORY,
+        date(2021, 1, 4),
+        artifact,
+        fetched_at=fetched_at,
+        requested_start=date(2021, 1, 1),
+        requested_end=date(2021, 1, 4),
+    )
+
+    prices = list(db.scalars(select(IndexDailyPrice).order_by(IndexDailyPrice.trading_date)))
+    source = db.scalar(
+        select(SourceArtifact).where(
+            SourceArtifact.artifact_type == ArtifactType.NIFTY_200_INDEX_HISTORY.value
+        )
+    )
+    assert first.status == "SUCCEEDED"
+    assert first.inserted == 2
+    assert second.repeated_artifact is True
+    assert len(prices) == 2
+    assert all(item.source_mode == "OFFICIAL" for item in prices)
+    assert all(item.source == "NSE_INDICES_HISTORICAL" for item in prices)
+    assert all(item.available_at.replace(tzinfo=UTC) == fetched_at for item in prices)
+    assert all(item.available_at.date() > item.trading_date for item in prices)
+    assert all(item.source_artifact_id == source.id for item in prices)
+    assert source.artifact_metadata["requested_start"] == "2021-01-01"
+    assert source.parser_version == "1.0.0"
+
+
+def test_official_index_history_conflict_is_explicit_and_demo_isolated(db):
+    service = _service(db)
+    service.import_artifact(
+        ArtifactType.NIFTY_200_INDEX_HISTORY,
+        date(2021, 1, 4),
+        _index_history_artifact(
+            '{"INDEX_NAME":"NIFTY 200","HistoricalDate":"04 Jan 2021",'
+            '"OPEN":"100","HIGH":"110","LOW":"90","CLOSE":"105"}'
+        ),
+        requested_start=date(2021, 1, 4),
+        requested_end=date(2021, 1, 4),
+    )
+    market_index = db.scalar(
+        select(MarketIndex).where(MarketIndex.symbol == "NIFTY200")
+    )
+    db.add(
+        IndexDailyPrice(
+            index_id=market_index.id,
+            trading_date=date(2021, 1, 4),
+            open=Decimal("1"),
+            high=Decimal("1"),
+            low=Decimal("1"),
+            close=Decimal("1"),
+            source_mode="DEMO",
+            source="TEST_DEMO",
+            available_at=datetime(2021, 1, 4, tzinfo=UTC),
+        )
+    )
+    db.commit()
+
+    result = service.import_artifact(
+        ArtifactType.NIFTY_200_INDEX_HISTORY,
+        date(2021, 1, 5),
+        _index_history_artifact(
+            '{"INDEX_NAME":"NIFTY 200","HistoricalDate":"04 Jan 2021",'
+            '"OPEN":"100","HIGH":"120","LOW":"90","CLOSE":"115"}',
+            name="revision.json",
+        ),
+        requested_start=date(2021, 1, 4),
+        requested_end=date(2021, 1, 5),
+    )
+    assert result.status == "PARTIAL"
+    assert result.conflicts == 1
+    assert result.rejected == 1
+    assert {issue.code for issue in result.issues} == {"INDEX_PRICE_CONFLICT"}
+    official = db.scalar(
+        select(IndexDailyPrice).where(IndexDailyPrice.source_mode == "OFFICIAL")
+    )
+    demo = db.scalar(select(IndexDailyPrice).where(IndexDailyPrice.source_mode == "DEMO"))
+    assert official.close == Decimal("105")
+    assert demo.close == Decimal("1")
+
+
+def test_coverage_reports_failed_nifty500_snapshot_without_partial_membership(db):
+    coverage = DataSourceCoverageService(db).coverage()
+    nifty500 = next(
+        item for item in coverage.activation_datasets if item.code == "NIFTY_500_MEMBERSHIP"
+    )
+
+    assert nifty500.status == "UNAVAILABLE"
+    assert nifty500.row_count == 0
+    assert nifty500.metrics["mapped_members"] == 0
+    assert nifty500.metrics["unmapped_members"] == 500
+    assert nifty500.warnings == ["UPSTREAM_SNAPSHOT_VALIDATION_FAILED"]
+    assert "no partial membership was persisted" in nifty500.detail.lower()
+    nifty500_index = next(item for item in coverage.index_coverage if item.symbol == "NIFTY500")
+    assert nifty500_index.warning == "UPSTREAM_SNAPSHOT_VALIDATION_FAILED"

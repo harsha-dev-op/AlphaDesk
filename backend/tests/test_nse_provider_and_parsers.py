@@ -21,10 +21,12 @@ from app.ingestion.nse.client import (
     OfficialSourceValidationError,
     validate_official_url,
 )
+from app.ingestion.nse.definitions import ArtifactType, eod_artifact_type, public_artifact_url
 from app.ingestion.nse.parsers import (
     parse_bhavcopy,
     parse_constituents,
     parse_corporate_actions,
+    parse_index_history,
     parse_security_master,
 )
 
@@ -159,6 +161,29 @@ def test_http_streamed_body_size_ceiling():
             client.fetch("https://nsearchives.nseindia.com/file.csv")
 
 
+def test_http_json_post_uses_the_official_contract_without_changing_safety_controls():
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["body"] = request.read().decode()
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=b"[]",
+        )
+
+    with _client(handler) as client:
+        result = client.post_json(
+            "https://www.niftyindices.com/BackPage/getHistoricaldatatabletoString",
+            {"cinfo": "{'name':'NIFTY 200'}"},
+        )
+    assert result.content == b"[]"
+    assert captured["method"] == "POST"
+    assert '"cinfo"' in captured["body"]
+    assert "NIFTY 200" in captured["body"]
+
+
 def test_archive_and_csv_rejections_cover_malformed_traversal_and_rows():
     with pytest.raises(ArtifactValidationError, match="Malformed ZIP"):
         csv_records(ArtifactBytes("bad.zip", b"not-a-zip", "fixture:bad"))
@@ -166,6 +191,14 @@ def test_archive_and_csv_rejections_cover_malformed_traversal_and_rows():
         csv_records(_zip("traversal.zip", b"a\n1\n", member="../escape.csv"))
     with pytest.raises(ArtifactValidationError, match="Malformed CSV row"):
         csv_records(_artifact("bad.csv", "a,b\n1,2,3\n"))
+
+
+def test_csv_reader_accepts_only_an_empty_trailing_official_column():
+    headers, rows = csv_records(_artifact("legacy.csv", "A,B,\n1,2,\n"))
+    assert headers == ["A", "B"]
+    assert rows == [(2, {"A": "1", "B": "2"})]
+    with pytest.raises(ArtifactValidationError, match="trailing CSV column"):
+        csv_records(_artifact("bad-trailing.csv", "A,B,\n1,2,unexpected\n"))
 
 
 def test_archive_decompression_ceiling_is_enforced(monkeypatch):
@@ -273,6 +306,67 @@ def test_constituent_parser_rejects_duplicate_and_unknown_series():
     assert {issue.code for issue in parsed.issues} == {
         "DUPLICATE_INDEX_MEMBER",
         "INVALID_CONSTITUENT",
+    }
+
+
+def test_legacy_bhavcopy_schema_and_official_transition_are_explicit():
+    artifact_day = date(2021, 1, 4)
+    parsed = parse_bhavcopy(
+        _artifact(
+            "cm04JAN2021bhav.csv",
+            "SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,ISIN,\n"
+            "ALPHA,EQ,100,110,90,105,12,1260,04-JAN-2021,INE000A01001,\n",
+        ),
+        expected_date=artifact_day,
+    )
+    assert len(parsed.rows) == 1
+    assert parsed.rows[0].volume == 12
+    assert eod_artifact_type(date(2024, 7, 5)) == ArtifactType.LEGACY_EOD_BHAVCOPY
+    assert eod_artifact_type(date(2024, 7, 8)) == ArtifactType.EOD_BHAVCOPY
+    assert public_artifact_url(
+        ArtifactType.LEGACY_EOD_BHAVCOPY, artifact_day
+    ).endswith("/2021/JAN/cm04JAN2021bhav.csv.zip")
+
+
+def test_index_history_parser_accepts_official_json_and_sorts_deterministically():
+    parsed = parse_index_history(
+        _artifact(
+            "nifty200.json",
+            '[{"INDEX_NAME":"NIFTY 200","HistoricalDate":"04 Jan 2021",'
+            '"OPEN":"180.1","HIGH":"184.2","LOW":"179.5","CLOSE":"183.7"},'
+            '{"INDEX_NAME":"Nifty 200","HistoricalDate":"01 Jan 2021",'
+            '"OPEN":"175","HIGH":"180","LOW":"174","CLOSE":"179"}]',
+        ),
+        requested_start=date(2021, 1, 1),
+        requested_end=date(2021, 12, 31),
+    )
+    assert [row.trading_date for row in parsed.rows] == [
+        date(2021, 1, 1),
+        date(2021, 1, 4),
+    ]
+    assert parsed.rows[0].close == 179
+    assert parsed.rejected_row_count == 0
+
+
+def test_index_history_parser_supports_csv_and_rejects_bad_identity_ohlc_and_duplicates():
+    parsed = parse_index_history(
+        _artifact(
+            "nifty200.csv",
+            "Index Name,Date,Open,High,Low,Close\n"
+            "NIFTY 200,2021-01-04,100,110,90,105\n"
+            "NIFTY 200,2021-01-04,100,110,90,105\n"
+            "NIFTY 500,2021-01-05,100,110,90,105\n"
+            "NIFTY 200,2021-01-06,100,90,95,96\n"
+            "NIFTY 200,2099-01-01,100,110,90,105\n",
+        ),
+        requested_start=date(2021, 1, 1),
+        requested_end=date(2099, 1, 1),
+    )
+    assert len(parsed.rows) == 1
+    assert parsed.rejected_row_count == 4
+    assert {issue.code for issue in parsed.issues} == {
+        "DUPLICATE_INDEX_PRICE",
+        "INVALID_INDEX_OHLC_ROW",
     }
 
 

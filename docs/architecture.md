@@ -1,4 +1,4 @@
-# AlphaDesk Phase 11 architecture
+# AlphaDesk Phase 12 architecture
 
 ## Request flow
 
@@ -200,3 +200,11 @@ transitions / duration / distribution    Phase 10 prepared composition
 The regime service calls the authoritative selected-feature calculator once over one ordered benchmark prefix. For each session, the current `VOLATILITY_20` is compared with the nearest-rank 80th percentile of at most 252 prior valid observations; the current observation enters the window only after classification. Fewer than 126 prior values or any missing trend input yields `INSUFFICIENT_HISTORY`. Classification precedence is high volatility, strict bull, strict bear, then sideways.
 
 Regime attribution prepares the Phase 9/10 composition stream once and calls the existing Phase 5 simulator once. Every setup and trade is joined to the regime on `signal_date`, never entry date. The overlay cannot filter signals, alter execution, or change allocation. Trade counts and trade-level net P&L must reconcile before a response is returned. Existing Phase 5–10 fingerprints are untouched; timeline and attribution receive separate additive fingerprints. See [the Phase 11 market-regime specification](market_regime.md).
+
+## Phase 12 official-data activation
+
+Phase 12 adds no second ingestion architecture and no schema. The existing Phase 8 source-artifact pipeline now selects the official legacy CM bhavcopy before 2024-07-08 and UDiFF from that transition date onward. Bounded annual commands partition into independently committed 93-day windows, skip already-successful source identities, and may use complete official NIFTY 200 benchmark observations only to distinguish request dates (including special weekend sessions). Missing downloads never create guessed holidays.
+
+Official NIFTY 200 historical OHLC enters the Phase 11 `index_daily_prices` table with `source_mode=OFFICIAL`, checksum-addressed artifact/run provenance, and truthful retrieval-time availability. It never substitutes for `NIFTYDEMO100`, and conflicts are recorded without overwriting existing rows. Current NIFTY membership imports retain their original Phase 8 semantics: a snapshot begins only on its explicit as-of date and is never projected backward.
+
+`GET /api/v1/data-coverage` derives per-dataset `UNAVAILABLE`, `PARTIAL`, or `READY` state from persisted official rows. Security master, current NIFTY 200/500 membership, raw equity coverage, official benchmark history, corporate actions, and calendar evidence are reported separately so a partially activated installation cannot imply complete historical point-in-time coverage. See [the Phase 12 activation report](official_market_data.md).

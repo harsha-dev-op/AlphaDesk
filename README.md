@@ -1,6 +1,6 @@
 # AlphaDesk
 
-AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 11 point-in-time market-regime research layer** above the Phase 10 performance-hardened composition workflow and Phase 8 official/public NSE EOD foundation: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic strategies and compositions, independent-trade and portfolio simulation, historical benchmark regimes, and signal-date performance attribution. It does not predict regimes, rank securities, change trades, generate recommendations, connect to brokers, or place real or paper orders.
+AlphaDesk is an AI-assisted quantitative research platform for Indian markets. This repository contains the **Phase 12 official-market-data activation layer** above the Phase 11 point-in-time regime engine and Phase 8 ingestion foundation: point-in-time market data, a versioned technical feature engine, the historical Market Scanner, revision-aware corporate actions, deterministic strategies and compositions, independent-trade and portfolio simulation, historical benchmark regimes, and signal-date performance attribution. It does not predict regimes, rank securities, change trades, generate recommendations, connect to brokers, or place real or paper orders.
 
 ## What is included
 
@@ -28,6 +28,7 @@ AlphaDesk is an AI-assisted quantitative research platform for Indian markets. T
 - React 19, Vite/Vinext, Tailwind CSS, reusable UI primitives, and responsive financial-operations pages
 - Isolated backend tests; no paid APIs or external credentials
 - Safe official/public NSE MII security-master and CM UDiFF raw EOD ingestion with local-file fallback
+- Date-aware legacy bhavcopy/UDiFF backfill, official NIFTY 200 benchmark OHLC ingestion, and explicit activation readiness
 - Immutable checksum-addressed source provenance, explicit DEMO/OFFICIAL/MIXED visibility, current-only Nifty 200/500 snapshots, and bounded incremental/backfill CLI tooling
 
 The dependency direction is:
@@ -175,6 +176,7 @@ See [the Phase 7 research composition specification](docs/research_composition.m
 See [the Phase 9 composition backtesting specification](docs/composition_backtesting.md) for historical N-of-M replay, canonical setup generation, Phase 5/6 reuse, point-in-time safeguards, fingerprints, APIs, UI, tests, and PostgreSQL measurements.
 See [the Phase 10 performance report](docs/phase10_performance.md) for profiling evidence, parity guarantees, prepared-context design, exact before/after PostgreSQL measurements, query counts, memory bounds, and deferred optimizations.
 See [the Phase 11 market-regime specification](docs/market_regime.md) for exact classification rules, benchmark storage, point-in-time behavior, transitions, fingerprints, attribution, APIs, performance, and limitations.
+See [the Phase 12 official-market-data activation report](docs/official_market_data.md) for activated coverage, provenance, readiness rules, smoke checks, and the exact remaining manual-artifact workflow.
 See [the official/public NSE source audit](docs/nse_data_sources.md) and [the ingestion runbook](docs/data_ingestion.md) for source contracts, responsible access, local fallback, CLI commands, validation, provenance, and bounded backfill operations.
 
 ## Verification
@@ -198,7 +200,7 @@ npm run build
 
 Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted split/bonus continuity, point-in-time availability/revisions, catalogs, versions, batch/latest/historical equivalence, bounded query shape, scanner validation, Phase 4 strategies, Phase 5 independent trades, Phase 6 allocation/cash/actions/marks/risk/OOS, Phase 7 composition/experiment/replay/fingerprint/API behavior, Phase 8 ingestion, Phase 9 composition range replay, Phase 10 fast-path/golden/shared-context parity, and Phase 11 regime rules/PIT/timelines/transitions/attribution/reconciliation.
 
-## Phase 11 limitations
+## Phase 12 limitations
 
 - Demo records are fictional and stop in March 2025; their stale-calendar warning is intentional.
 - Only mechanically deterministic split and bonus adjustments are calculated. Other corporate actions are stored but require a validated policy in a later phase.
@@ -211,9 +213,10 @@ Tests cover the Phase 1 controls plus technical formulas and warm-ups, adjusted 
 - Automated official downloads may be denied or time out; AlphaDesk stops without bypass and supports operator-downloaded files in the project-local inbox.
 - Public corporate-action CSV rows without trustworthy publication timestamps remain quarantined and cannot influence point-in-time adjustments.
 - Phase 8 is EOD-only and operator initiated; there is no scheduler, bulk redistribution endpoint, streaming quote path, or multi-year autonomous download.
-- Official benchmark index levels are not fetched or fabricated in Phase 11. OFFICIAL regime coverage remains unavailable until a future responsible public-data ingest supplies dedicated index rows.
+- Official NIFTY 200 benchmark levels are activated, but their `available_at` remains the truthful retrieval time; AlphaDesk never backdates when historical rows became knowable locally.
+- NIFTY 200 is ready. The fresh official NIFTY 500 file verified on 2026-09-20 produced only 498 valid members after strict identity/series validation, so NIFTY 500 remains unavailable; no partial snapshot was persisted and no replacement data was fabricated. See `data/nse/MANUAL_ARTIFACTS_REQUIRED.md` for the exact operator workflow.
 - `MARKET_REGIME_4_STATE` v1 is descriptive and rule-based. It does not forecast transitions, select strategies, filter trades, or alter position sizing.
 
-## Architecture decision after Phase 11
+## Architecture decision after Phase 12
 
-Official equity data remains normalized into the security, raw-price, action, membership, and calendar tables consumed by the research stack. Benchmark levels use the dedicated `index_daily_prices` table rather than fake securities. Phase 11 computes one selected-feature benchmark timeline, an efficient prior-only volatility threshold, and an additive attribution overlay over the Phase 10 prepared composition and unchanged Phase 5 execution. Existing signal, backtest, and portfolio identities remain separate and byte-stable. No cache, feature store, optimizer, broker, background worker, or persistent regime-result table is introduced.
+Official equity data remains normalized into the security, raw-price, action, membership, and calendar tables consumed by the research stack. Benchmark levels use the dedicated `index_daily_prices` table rather than fake securities. Phase 12 reuses these paths, adds no schema, and keeps DEMO and OFFICIAL benchmark modes isolated. Existing signal, backtest, portfolio, and regime semantics remain unchanged; no cache, feature store, optimizer, broker, background worker, or persistent regime-result table is introduced.

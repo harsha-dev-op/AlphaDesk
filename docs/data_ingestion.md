@@ -81,6 +81,17 @@ Later, deliberately backfill in resumable chunks of at most 93 calendar days:
 
 Do not launch a multi-year run. Use successive small date windows, inspect each result, and stop on provider rate limits or access denial. A missing download is unknown—not proof of a holiday or a no-trade session.
 
+Phase 12 also provides a resumable annual wrapper and the official NIFTY 200 benchmark path:
+
+```powershell
+.\.venv\Scripts\python -m app.ingestion.nse.cli backfill-year --from 2026-01-01 --to 2026-09-18 --dry-run
+.\.venv\Scripts\python -m app.ingestion.nse.cli backfill-year --from 2026-01-01 --to 2026-09-18
+.\.venv\Scripts\python -m app.ingestion.nse.cli index-history --from 2026-01-01 --to 2026-09-18 --dry-run
+.\.venv\Scripts\python -m app.ingestion.nse.cli index-history-backfill --from 2021-01-01 --to 2026-09-18
+```
+
+The EOD importer selects the legacy official bhavcopy before 2024-07-08 and UDiFF on/after that transition. Index-history requests are limited to 366 calendar days and the backfill command partitions them by calendar year. OFFICIAL benchmark rows retain retrieval-time `available_at`; they are never backdated and never substitute for DEMO rows.
+
 ## Acceptance policy
 
 - Only Capital Market `EQ` rows are accepted in Phase 8. Other series are explicitly counted and reported.
