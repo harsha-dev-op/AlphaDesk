@@ -247,11 +247,34 @@ class FundamentalIntelligenceService:
         fact = values[0][1]
         return Decimal(fact.value), [fact.period_end]
 
+    @staticmethod
+    def _latest_quarter(
+        grouped: dict[str, list[tuple[FundamentalFiling, FundamentalFact]]], concept: str
+    ) -> tuple[Decimal | None, list[date], str | None]:
+        value = next(
+            (
+                fact
+                for _, fact in grouped.get(concept, [])
+                if fact.value_nature == "QUARTERLY"
+                and 70 <= (fact.period_end - fact.period_start).days <= 100
+            ),
+            None,
+        )
+        if value is None:
+            return None, [], "LATEST_INDEPENDENT_QUARTER_REQUIRED"
+        return Decimal(value.value), [value.period_end], None
+
     def metrics(self, symbol: str, *, as_of: datetime) -> FundamentalMetricsResponse:
         security = self._security(symbol)
         filings, scope, _ = self._select_scope(self._eligible_filings(security.id, as_of), "CONSOLIDATED")
         grouped = self._facts_by_concept(filings)
         computed: dict[str, tuple[Decimal | None, list[date], str | None]] = {}
+        for code, concept in (
+            ("REVENUE_LATEST_QUARTER", "REVENUE"),
+            ("PAT_LATEST_QUARTER", "PROFIT_AFTER_TAX"),
+            ("EPS_LATEST_QUARTER", "EPS_BASIC"),
+        ):
+            computed[code] = self._latest_quarter(grouped, concept)
         for code, concept in (("REVENUE_YOY", "REVENUE"), ("PAT_YOY", "PROFIT_AFTER_TAX"), ("EPS_YOY", "EPS_BASIC")):
             computed[code] = self._growth(grouped, concept)
         for code, concept in (("REVENUE_TTM", "REVENUE"), ("PAT_TTM", "PROFIT_AFTER_TAX"), ("EPS_TTM", "EPS_BASIC")):
@@ -270,11 +293,25 @@ class FundamentalIntelligenceService:
             if revenue_ttm in {None, Decimal(0)} or pat_ttm is None
             else (pat_ttm / revenue_ttm, sorted(set(revenue_periods + pat_periods)), None)
         )
-        computed["DEBT_TO_EQUITY"] = (
-            (None, sorted(set(debt_periods + equity_periods)), "NONZERO_EQUITY_REQUIRED")
-            if debt is None or equity in {None, Decimal(0)}
-            else (debt / equity, sorted(set(debt_periods + equity_periods)), None)
-        )
+        debt_to_equity_periods = sorted(set(debt_periods + equity_periods))
+        if debt is None:
+            computed["DEBT_TO_EQUITY"] = (
+                None,
+                debt_to_equity_periods,
+                "TOTAL_BORROWINGS_REQUIRED",
+            )
+        elif equity in {None, Decimal(0)}:
+            computed["DEBT_TO_EQUITY"] = (
+                None,
+                debt_to_equity_periods,
+                "NONZERO_EQUITY_REQUIRED",
+            )
+        else:
+            computed["DEBT_TO_EQUITY"] = (
+                debt / equity,
+                debt_to_equity_periods,
+                None,
+            )
         equity_history = grouped.get("TOTAL_EQUITY", [])
         prior_equity = None
         prior_equity_period = None

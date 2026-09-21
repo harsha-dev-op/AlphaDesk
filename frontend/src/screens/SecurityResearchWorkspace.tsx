@@ -21,10 +21,27 @@ import type { FeatureValue, RelativeStrengthMetric, StrategyRuleMetadata } from 
 
 const pct = (value: string | null | undefined) => value == null ? '—' : `${(Number(value) * 100).toFixed(2)}%`;
 const metricNames: Record<string, string> = {
-  REVENUE_TTM: 'Revenue TTM', REVENUE_YOY: 'Revenue YoY', PAT_TTM: 'PAT TTM', PAT_YOY: 'PAT YoY',
-  EPS_TTM: 'EPS TTM', NET_MARGIN_TTM: 'Net margin', DEBT_TO_EQUITY: 'Debt / equity', ROE_TTM: 'ROE', FCF_TTM: 'FCF TTM', PE_TTM: 'PE TTM',
+  REVENUE_LATEST_QUARTER: 'Revenue latest quarter', REVENUE_TTM: 'Revenue TTM', REVENUE_YOY: 'Revenue YoY',
+  PAT_LATEST_QUARTER: 'PAT latest quarter', PAT_TTM: 'PAT TTM', PAT_YOY: 'PAT YoY',
+  EPS_LATEST_QUARTER: 'EPS latest quarter', EPS_TTM: 'EPS TTM', NET_MARGIN_TTM: 'Net margin',
+  DEBT_TO_EQUITY: 'Debt / equity', ROE_TTM: 'ROE', FCF_TTM: 'FCF TTM', PE_TTM: 'PE TTM',
 };
 const percentMetrics = new Set(['REVENUE_YOY', 'PAT_YOY', 'NET_MARGIN_TTM', 'ROE_TTM']);
+const croreMetrics = new Set(['REVENUE_LATEST_QUARTER', 'REVENUE_TTM', 'PAT_LATEST_QUARTER', 'PAT_TTM', 'FCF_TTM']);
+
+const formatMetric = (code: string, value: string | null | undefined) => {
+  if (value == null) return null;
+  if (percentMetrics.has(code)) return pct(value);
+  if (croreMetrics.has(code)) return `₹ ${(Number(value) / 10_000_000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr`;
+  return Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+};
+
+const formatFact = (value: string | null | undefined, unit: string | undefined) => {
+  if (value == null) return '—';
+  if (unit === 'INR') return `₹ ${(Number(value) / 10_000_000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr`;
+  if (unit === 'INR_PER_SHARE') return `₹ ${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return Number(value).toLocaleString('en-IN', { maximumFractionDigits: 4 });
+};
 
 function IntelligenceValue({ value, reason }: { value: string | null; reason?: string | null }) {
   return <span title={reason ?? undefined}>{value ?? '—'}</span>;
@@ -47,11 +64,11 @@ function FundamentalsPanel({ symbol, asOf }: { symbol: string; asOf: string }) {
   return <div className="space-y-4">
     <Surface>
       <SurfaceHeader eyebrow="Official filings" title="Fundamental intelligence" description="Consolidated is preferred; any standalone fallback is explicit. Missing values are never shown as zero." action={<StatusBadge status={fundamentals.data?.status ?? 'UNAVAILABLE'} />} />
-      {metrics.loading ? <div className="p-4"><Skeleton className="h-28 rounded-none" /></div> : <div className="grid gap-px bg-border/70 sm:grid-cols-2 xl:grid-cols-5">{Object.entries(metricNames).map(([code, label]) => { const item = byCode.get(code); const formatted = item?.value == null ? null : percentMetrics.has(code) ? pct(item.value) : Number(item.value).toLocaleString('en-IN', { maximumFractionDigits: 2 }); return <div key={code} className="bg-background p-3"><p className="text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</p><p className="numeric mt-2 text-lg font-semibold"><IntelligenceValue value={formatted} reason={item?.reason ?? 'Not available from activated official filings'} /></p><p className="mt-1 text-[0.6875rem] text-muted-foreground">{item?.source_scope ?? 'No activated scope'}</p></div>; })}</div>}
+      {metrics.loading ? <div className="p-4"><Skeleton className="h-28 rounded-none" /></div> : <div className="grid gap-px bg-border/70 sm:grid-cols-2 xl:grid-cols-5">{Object.entries(metricNames).map(([code, label]) => { const item = byCode.get(code); return <div key={code} className="bg-background p-3"><p className="text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</p><p className="numeric mt-2 text-lg font-semibold"><IntelligenceValue value={formatMetric(code, item?.value)} reason={item?.reason ?? 'Not available from activated official filings'} /></p><p className="mt-1 text-[0.6875rem] text-muted-foreground">{item?.source_scope ?? 'No activated scope'}</p></div>; })}</div>}
     </Surface>
     <Surface>
       <SurfaceHeader title="Financial history" description="Each row retains reporting scope, cumulative nature, audit state, and point-in-time availability." />
-      {fundamentals.loading ? <div className="p-4"><Skeleton className="h-40 rounded-none" /></div> : !fundamentals.data?.filings.length ? <NoResults message="No activated official financial filing is available at this as-of time." /> : <div className="terminal-scrollbar overflow-x-auto"><Table className="min-w-[900px] text-xs"><TableHeader><TableRow><TableHead className="pl-4">Period</TableHead><TableHead>Revenue</TableHead><TableHead>PAT</TableHead><TableHead>EPS</TableHead><TableHead>Scope</TableHead><TableHead>Nature</TableHead><TableHead>Audit</TableHead><TableHead className="pr-4">Available at</TableHead></TableRow></TableHeader><TableBody>{fundamentals.data.filings.map((filing) => { const fact = (code: string) => filing.facts.find((item) => item.normalized_concept === code); return <TableRow key={filing.id}><TableCell className="pl-4">{formatDate(filing.period_end)}</TableCell><TableCell className="numeric">{fact('REVENUE')?.value ?? '—'}</TableCell><TableCell className="numeric">{fact('PROFIT_AFTER_TAX')?.value ?? '—'}</TableCell><TableCell className="numeric">{fact('EPS_BASIC')?.value ?? '—'}</TableCell><TableCell>{filing.scope}</TableCell><TableCell>{fact('REVENUE')?.value_nature ?? filing.reporting_frequency}</TableCell><TableCell>{filing.audit_status}</TableCell><TableCell className="pr-4">{formatDateTime(filing.available_at)}</TableCell></TableRow>; })}</TableBody></Table></div>}
+      {fundamentals.loading ? <div className="p-4"><Skeleton className="h-40 rounded-none" /></div> : !fundamentals.data?.filings.length ? <NoResults message="No activated official financial filing is available at this as-of time." /> : <div className="terminal-scrollbar overflow-x-auto"><Table className="min-w-[900px] text-xs"><TableHeader><TableRow><TableHead className="pl-4">Period</TableHead><TableHead>Revenue</TableHead><TableHead>PAT</TableHead><TableHead>EPS</TableHead><TableHead>Scope</TableHead><TableHead>Nature</TableHead><TableHead>Audit</TableHead><TableHead className="pr-4">Available at</TableHead></TableRow></TableHeader><TableBody>{fundamentals.data.filings.map((filing) => { const fact = (code: string) => filing.facts.find((item) => item.normalized_concept === code && item.value_nature === 'QUARTERLY'); const revenue = fact('REVENUE'); const pat = fact('PROFIT_AFTER_TAX'); const eps = fact('EPS_BASIC'); return <TableRow key={filing.id}><TableCell className="pl-4">{formatDate(filing.period_end)}</TableCell><TableCell className="numeric">{formatFact(revenue?.value, revenue?.unit)}</TableCell><TableCell className="numeric">{formatFact(pat?.value, pat?.unit)}</TableCell><TableCell className="numeric">{formatFact(eps?.value, eps?.unit)}</TableCell><TableCell>{filing.scope}</TableCell><TableCell>{revenue?.value_nature ?? filing.reporting_frequency}</TableCell><TableCell>{filing.audit_status}</TableCell><TableCell className="pr-4">{formatDateTime(filing.available_at)}</TableCell></TableRow>; })}</TableBody></Table></div>}
     </Surface>
     <Surface>
       <SurfaceHeader title="Filing provenance" description="Auditable source identity and revision state; no local paths or credentials are exposed." />

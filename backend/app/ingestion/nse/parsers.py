@@ -166,6 +166,15 @@ class NormalizedFundamentalFactRow:
     scale: int
     fact_kind: str
     value_nature: str
+    fact_period_start: date | None = None
+    fact_period_end: date | None = None
+    source_namespace: str | None = None
+    source_qname: str | None = None
+    source_context_id: str | None = None
+    source_unit: str | None = None
+    source_decimals: str | None = None
+    source_locator: str | None = None
+    source_artifact_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -942,6 +951,15 @@ FUNDAMENTAL_ALIASES = {
     "scale": ("Scale",),
     "fact_kind": ("Fact Kind", "Period Type"),
     "value_nature": ("Value Nature", "Value Type"),
+    "fact_period_start": ("Fact Period Start",),
+    "fact_period_end": ("Fact Period End",),
+    "source_namespace": ("Source Namespace",),
+    "source_qname": ("Source QName",),
+    "source_context_id": ("Source Context ID",),
+    "source_unit": ("Source Unit",),
+    "source_decimals": ("Source Decimals",),
+    "source_locator": ("Source Locator",),
+    "source_artifact_sha256": ("Source Artifact SHA256",),
 }
 
 
@@ -1017,10 +1035,22 @@ def parse_financial_results(
             unit = row[columns["unit"]].strip().upper()
             if not unit:
                 raise ValueError("unit is blank")
+            fact_period_start = (
+                _parse_date(row[columns["fact_period_start"]], "fact period start")
+                if "fact_period_start" in columns and row[columns["fact_period_start"]].strip()
+                else period_start
+            )
+            fact_period_end = (
+                _parse_date(row[columns["fact_period_end"]], "fact period end")
+                if "fact_period_end" in columns and row[columns["fact_period_end"]].strip()
+                else period_end
+            )
+            if fact_period_end < fact_period_start:
+                raise ValueError("fact period end precedes fact period start")
         except (ValueError, KeyError) as exc:
             issues.add(IssueSeverity.ERROR, "MALFORMED_FUNDAMENTAL_FACT", str(exc), row_number=row_number, rejected=True)
             continue
-        identity = (symbol, source_filing_id, source_concept.casefold(), period_start, period_end)
+        identity = (symbol, source_filing_id, source_concept.casefold(), fact_period_start, fact_period_end)
         if identity in seen:
             issues.add(IssueSeverity.ERROR, "DUPLICATE_FUNDAMENTAL_FACT", "Duplicate filing fact in artifact", row_number=row_number, row_key=f"{symbol}:{source_filing_id}:{source_concept}", rejected=True)
             continue
@@ -1035,6 +1065,15 @@ def parse_financial_results(
                 audit_status=audit_status, submission_at=submission_at,
                 source_concept=source_concept, value=value, unit=unit, scale=scale,
                 fact_kind=fact_kind, value_nature=value_nature,
+                fact_period_start=fact_period_start,
+                fact_period_end=fact_period_end,
+                source_namespace=(row[columns["source_namespace"]].strip() if "source_namespace" in columns else None) or None,
+                source_qname=(row[columns["source_qname"]].strip() if "source_qname" in columns else None) or None,
+                source_context_id=(row[columns["source_context_id"]].strip() if "source_context_id" in columns else None) or None,
+                source_unit=(row[columns["source_unit"]].strip() if "source_unit" in columns else None) or None,
+                source_decimals=(row[columns["source_decimals"]].strip() if "source_decimals" in columns else None) or None,
+                source_locator=(row[columns["source_locator"]].strip() if "source_locator" in columns else None) or None,
+                source_artifact_sha256=(row[columns["source_artifact_sha256"]].strip() if "source_artifact_sha256" in columns else None) or None,
             )
         )
     return ParseResult(tuple(output), tuple(issues.items), len(source_rows), issues.rejected_count, issues.warning_count)

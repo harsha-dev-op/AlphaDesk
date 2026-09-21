@@ -9,6 +9,7 @@ from app.database.session import SessionLocal
 from app.ingestion.nse.artifacts import ArtifactValidationError
 from app.ingestion.nse.client import OfficialSourceError
 from app.ingestion.nse.definitions import ArtifactType, SOURCE_DEFINITIONS
+from app.ingestion.nse.ixbrl import download_fundamentals_ixbrl
 from app.ingestion.nse.service import NseIngestionService
 from app.services.data_sources import DataSourceCoverageService
 
@@ -113,6 +114,21 @@ def build_parser() -> argparse.ArgumentParser:
     fundamentals_parser.add_argument("--as-of", required=True, type=_date)
     fundamentals_parser.add_argument("--dry-run", action="store_true")
 
+    ixbrl_parser = subparsers.add_parser(
+        "fundamentals-ixbrl",
+        help="Import an official NSE financial-results listing plus linked XBRL instances",
+    )
+    ixbrl_parser.add_argument("bundle")
+    ixbrl_parser.add_argument("--symbol", required=True)
+    ixbrl_parser.add_argument("--dry-run", action="store_true")
+
+    ixbrl_download_parser = subparsers.add_parser(
+        "fundamentals-ixbrl-download",
+        help="Download exact official XBRL links from a local NSE listing CSV",
+    )
+    ixbrl_download_parser.add_argument("bundle")
+    ixbrl_download_parser.add_argument("--symbol", required=True)
+
     classifications_parser = subparsers.add_parser(
         "classifications", help="Import an official NSE Indices classification snapshot"
     )
@@ -141,6 +157,11 @@ def _run(args: argparse.Namespace) -> object:
                 for artifact_type, definition in SOURCE_DEFINITIONS.items()
             ],
         }
+    if args.command == "fundamentals-ixbrl-download":
+        return download_fundamentals_ixbrl(
+            args.bundle,
+            symbol=args.symbol,
+        ).as_dict()
     with SessionLocal() as session:
         service = NseIngestionService(session)
         coverage = DataSourceCoverageService(session)
@@ -238,6 +259,12 @@ def _run(args: argparse.Namespace) -> object:
                 args.file,
                 dry_run=args.dry_run,
             ).as_dict()
+        if args.command == "fundamentals-ixbrl":
+            return service.import_fundamentals_ixbrl(
+                args.bundle,
+                symbol=args.symbol,
+                dry_run=args.dry_run,
+            )
         if args.command == "classifications":
             return service.import_local(
                 ArtifactType.INDUSTRY_CLASSIFICATION,

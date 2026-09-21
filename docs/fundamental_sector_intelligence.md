@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-Phase 13A adds backend architecture only. No official financial-result or industry-classification artifact was imported during implementation, so Data Health truthfully reports `FUNDAMENTALS`, `INDUSTRY_CLASSIFICATION`, and `SECTOR_BENCHMARKS` as `UNAVAILABLE` until qualifying official files are imported. No unofficial source, generated history, or inferred sector benchmark is used.
+Phase 13A added the backend architecture. Phase 13C activated official RELIANCE fundamentals from six operator-downloaded consolidated NSE integrated-financial XBRL instances. Data Health therefore reports RELIANCE fundamentals from their genuine filing timestamps; industry classification and sector benchmarks remain unavailable until qualifying official files are imported. No unofficial source, generated history, or inferred sector benchmark is used.
 
 ## Point-in-time filing model
 
@@ -40,3 +40,9 @@ The read-only API surface is:
 The lightweight research summary composes identity, latest eligible market data, and truthful fundamental/classification/relative-strength statuses. It produces no AI conclusion.
 
 Official artifacts remain local and Git-ignored. Follow [`data/nse/PHASE13_MANUAL_ARTIFACTS.md`](../data/nse/PHASE13_MANUAL_ARTIFACTS.md) for dry-run commands and required schemas.
+
+## Phase 13C RELIANCE activation boundary
+
+The encountered NSE files are raw XBRL instances rather than inline-XBRL HTML. The RELIANCE-only adapter validates the official listing-to-file link, official archive hostname, NSE identity, consolidated scope, audit state, broadcast timestamp, supported SEBI taxonomy namespace, primary contexts, units, and checksums before normalizing facts into the existing append-only filing model. It preserves raw QName, namespace, context, decimals, unit, file locator, and artifact checksum metadata. Unsupported concepts remain auditable and unmapped rather than being guessed.
+
+As of 2026-09-20, six consolidated filings and 1,018 facts are activated for RELIANCE. Latest-quarter revenue, PAT, and EPS and the supported YoY/TTM metrics are available point-in-time. Debt-to-equity is unavailable because the reviewed registry has no total-borrowings fact for these filings; FCF TTM is unavailable because the source cash-flow facts do not provide four independent quarters. Standalone filings, other issuers, classification, sector benchmarks, and any inferred or synthesized facts remain outside this activation.

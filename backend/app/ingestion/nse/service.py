@@ -50,6 +50,7 @@ from app.ingestion.nse.parsers import (
     parse_index_history,
     parse_security_master,
 )
+from app.ingestion.nse.ixbrl import prepare_fundamentals_ixbrl
 from app.models import (
     CorporateAction,
     DailyPrice,
@@ -276,6 +277,24 @@ class NseIngestionService:
             dry_run=dry_run,
             fetched_at=None,
         )
+
+    def import_fundamentals_ixbrl(
+        self,
+        value: str | Path,
+        *,
+        symbol: str,
+        dry_run: bool = False,
+    ) -> dict[str, object]:
+        bundle = prepare_fundamentals_ixbrl(value, symbol=symbol, store=self.store)
+        if bundle.rejected_filings and not dry_run:
+            raise ValueError("Production import requires every discovered XBRL artifact to validate")
+        summary = self.import_artifact(
+            ArtifactType.FINANCIAL_RESULTS,
+            bundle.source_date,
+            bundle.artifact,
+            dry_run=dry_run,
+        )
+        return {**bundle.as_dict(), "ingestion": summary.as_dict()}
 
     def fetch_and_import(
         self,
@@ -1042,8 +1061,11 @@ class NseIngestionService:
                             row.scale,
                             row.fact_kind,
                             row.value_nature,
-                            row.period_start,
-                            row.period_end,
+                            row.fact_period_start or row.period_start,
+                            row.fact_period_end or row.period_end,
+                            row.source_qname,
+                            row.source_context_id,
+                            row.source_artifact_sha256,
                         )
                         for row in filing_rows
                     ),
@@ -1155,9 +1177,18 @@ class NseIngestionService:
                         scale=row.scale,
                         fact_kind=row.fact_kind,
                         value_nature=row.value_nature,
-                        period_start=row.period_start,
-                        period_end=row.period_end,
-                        fact_metadata={"concept_registry_version": "1"},
+                        period_start=row.fact_period_start or row.period_start,
+                        period_end=row.fact_period_end or row.period_end,
+                        fact_metadata={
+                            "concept_registry_version": "1",
+                            "source_namespace": row.source_namespace,
+                            "source_qname": row.source_qname,
+                            "source_context_id": row.source_context_id,
+                            "source_unit": row.source_unit,
+                            "source_decimals": row.source_decimals,
+                            "source_locator": row.source_locator,
+                            "source_artifact_sha256": row.source_artifact_sha256,
+                        },
                     )
                 )
             plan.inserted += len(filing_rows)

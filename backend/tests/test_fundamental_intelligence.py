@@ -212,8 +212,9 @@ def test_growth_and_balance_sheet_metric_formulas(db):
 
 def test_metric_unavailable_reason_is_explicit(db):
     security = _security(); db.add(security); db.commit()
-    metric = next(item for item in FundamentalIntelligenceService(db).metrics("ALPHA", as_of=datetime(2026, 9, 1, tzinfo=UTC)).metrics if item.code == "PE_TTM")
-    assert metric.status == "UNAVAILABLE" and metric.reason
+    metrics = {item.code: item for item in FundamentalIntelligenceService(db).metrics("ALPHA", as_of=datetime(2026, 9, 1, tzinfo=UTC)).metrics}
+    assert metrics["PE_TTM"].status == "UNAVAILABLE" and metrics["PE_TTM"].reason
+    assert metrics["DEBT_TO_EQUITY"].reason == "TOTAL_BORROWINGS_REQUIRED"
 
 
 def _classification(db, security, run, artifact, *, snapshot=date(2026, 9, 20), available=None, sector="Technology", industry="Software", basic="IT Services", sector_benchmark_index_id=None):

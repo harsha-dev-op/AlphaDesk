@@ -29,17 +29,17 @@ _CONCEPTS = (
     ConceptDefinition("FINANCE_COST", "INCOME_STATEMENT", "DURATION", ("Finance Costs", "Finance Cost")),
     ConceptDefinition("PROFIT_BEFORE_TAX", "INCOME_STATEMENT", "DURATION", ("Profit Before Tax", "Profit Before Tax From Continuing Operations")),
     ConceptDefinition("TAX_EXPENSE", "INCOME_STATEMENT", "DURATION", ("Tax Expense", "Total Tax Expense")),
-    ConceptDefinition("PROFIT_AFTER_TAX", "INCOME_STATEMENT", "DURATION", ("Profit After Tax", "Net Profit After Tax", "Profit For The Period")),
-    ConceptDefinition("EPS_BASIC", "INCOME_STATEMENT", "DURATION", ("Basic EPS", "Basic Earnings Per Share")),
-    ConceptDefinition("EPS_DILUTED", "INCOME_STATEMENT", "DURATION", ("Diluted EPS", "Diluted Earnings Per Share")),
+    ConceptDefinition("PROFIT_AFTER_TAX", "INCOME_STATEMENT", "DURATION", ("Profit After Tax", "Net Profit After Tax", "Profit For The Period", "ProfitLossForPeriod")),
+    ConceptDefinition("EPS_BASIC", "INCOME_STATEMENT", "DURATION", ("Basic EPS", "Basic Earnings Per Share", "BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations")),
+    ConceptDefinition("EPS_DILUTED", "INCOME_STATEMENT", "DURATION", ("Diluted EPS", "Diluted Earnings Per Share", "DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations")),
     ConceptDefinition("TOTAL_ASSETS", "BALANCE_SHEET", "INSTANT", ("Total Assets",)),
-    ConceptDefinition("TOTAL_EQUITY", "BALANCE_SHEET", "INSTANT", ("Total Equity", "Total Shareholders Equity")),
+    ConceptDefinition("TOTAL_EQUITY", "BALANCE_SHEET", "INSTANT", ("Total Equity", "Total Shareholders Equity", "Equity")),
     ConceptDefinition("TOTAL_BORROWINGS", "BALANCE_SHEET", "INSTANT", ("Total Borrowings", "Borrowings")),
     ConceptDefinition("CURRENT_BORROWINGS", "BALANCE_SHEET", "INSTANT", ("Current Borrowings",)),
     ConceptDefinition("NON_CURRENT_BORROWINGS", "BALANCE_SHEET", "INSTANT", ("Non Current Borrowings", "Non-Current Borrowings")),
     ConceptDefinition("CASH_AND_CASH_EQUIVALENTS", "BALANCE_SHEET", "INSTANT", ("Cash And Cash Equivalents",)),
-    ConceptDefinition("CASH_FLOW_FROM_OPERATIONS", "CASH_FLOW", "DURATION", ("Cash Flow From Operating Activities", "Net Cash From Operating Activities")),
-    ConceptDefinition("CAPITAL_EXPENDITURE", "CASH_FLOW", "DURATION", ("Capital Expenditure", "Purchase Of Property Plant And Equipment")),
+    ConceptDefinition("CASH_FLOW_FROM_OPERATIONS", "CASH_FLOW", "DURATION", ("Cash Flow From Operating Activities", "Net Cash From Operating Activities", "CashFlowsFromUsedInOperatingActivities")),
+    ConceptDefinition("CAPITAL_EXPENDITURE", "CASH_FLOW", "DURATION", ("Capital Expenditure", "Purchase Of Property Plant And Equipment", "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities")),
 )
 
 CONCEPT_DEFINITIONS = {item.code: item for item in _CONCEPTS}
@@ -57,6 +57,9 @@ def normalize_concept(source_concept: str) -> str | None:
 
 
 METRIC_DEFINITIONS: dict[str, str] = {
+    "REVENUE_LATEST_QUARTER": "latest independent quarterly revenue fact",
+    "PAT_LATEST_QUARTER": "latest independent quarterly PAT fact",
+    "EPS_LATEST_QUARTER": "latest independent quarterly basic EPS fact",
     "REVENUE_YOY": "latest independent quarter revenue / comparable prior-year quarter - 1",
     "PAT_YOY": "latest independent quarter PAT / comparable prior-year quarter - 1",
     "EPS_YOY": "latest independent quarter basic EPS / comparable prior-year quarter - 1",
