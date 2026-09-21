@@ -152,8 +152,8 @@ SOURCE_DEFINITIONS: dict[ArtifactType, SourceDefinition] = {
         "https://www.nseindia.com/companies-listing/corporate-filings-financial-results",
         "Operator-downloaded structured financial-results CSV",
         "NSE_FINANCIAL_RESULTS",
-        "1.1.0",
-        "Local official CSV import plus deterministic listing/XBRL bundle normalization; no automated bulk filing download is attempted.",
+        "1.2.0",
+        "Local official listing/XBRL normalization plus bounded, resumable downloads from exact official listing links.",
         "Each row requires a trustworthy timezone-aware submission/broadcast timestamp; period end is never availability.",
     ),
     ArtifactType.INDUSTRY_CLASSIFICATION: SourceDefinition(

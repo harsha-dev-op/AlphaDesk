@@ -285,7 +285,23 @@ class NseIngestionService:
         symbol: str,
         dry_run: bool = False,
     ) -> dict[str, object]:
-        bundle = prepare_fundamentals_ixbrl(value, symbol=symbol, store=self.store)
+        normalized_symbol = symbol.strip().upper()
+        security = self.session.scalar(
+            select(Security).where(
+                Security.exchange == "NSE",
+                Security.symbol == normalized_symbol,
+            )
+        )
+        if security is None:
+            raise ValueError("XBRL symbol is absent from the official NSE security master")
+        if security.series != "EQ" or not security.is_active:
+            raise ValueError("XBRL activation requires an active NSE EQ-series security")
+        bundle = prepare_fundamentals_ixbrl(
+            value,
+            symbol=normalized_symbol,
+            expected_isin=security.isin,
+            store=self.store,
+        )
         if bundle.rejected_filings and not dry_run:
             raise ValueError("Production import requires every discovered XBRL artifact to validate")
         summary = self.import_artifact(

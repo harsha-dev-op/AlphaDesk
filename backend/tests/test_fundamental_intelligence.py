@@ -389,7 +389,7 @@ def test_classification_import_is_idempotent_and_not_backcast(db):
     intelligence = FundamentalIntelligenceService(db)
     assert first.inserted == 1 and second.repeated_artifact
     assert intelligence.classification("ALPHA", as_of=datetime(2026, 9, 19, tzinfo=UTC)).status == "UNAVAILABLE"
-    assert intelligence.classification("ALPHA", as_of=datetime(2026, 9, 21, tzinfo=UTC)).status == "READY"
+    assert intelligence.classification("ALPHA", as_of=datetime(2026, 9, 22, tzinfo=UTC)).status == "READY"
 
 
 def test_classification_import_links_only_existing_official_exact_sector_index(db):

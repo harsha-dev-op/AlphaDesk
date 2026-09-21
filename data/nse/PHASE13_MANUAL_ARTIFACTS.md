@@ -1,6 +1,6 @@
 # Phase 13 official manual artifacts
 
-Status: **RELIANCE FUNDAMENTALS ACTIVATED; OTHER FUNDAMENTALS AND CLASSIFICATION NOT ACTIVATED**
+Status: **RELIANCE FUNDAMENTALS ACTIVATED; GENERIC NON-FINANCIAL IND AS PIPELINE READY**
 
 Use only operator-downloaded official files from NSE or NSE Indices. Keep them in Git-ignored `data/nse/inbox/`. Do not scrape unofficial sites, bypass source protections, or invent publication timestamps.
 
@@ -34,6 +34,26 @@ Always run the separate dry-run import afterward. A successful download is not i
 Production import is permitted only after a clean dry-run with no rejected linked filings. The Phase 13C activation imported six consolidated filings and 1,018 facts; 92 facts matched the explicit v1 concept registry and 926 remained auditable but unmapped. A repeated import inserted zero facts and reported all 1,018 unchanged. No raw artifact was edited.
 
 The generic deterministic CSV contract remains available for future reviewed source-family adapters. Do not hand-edit an official download to resemble this contract.
+
+## Phase 13D reusable XBRL workflow
+
+Phase 13D generalizes the reviewed adapter to standard non-financial NSE Ind AS filings while retaining explicit SEBI taxonomy-family validation. `RELIANCE` remains the regression reference. `HDFCBANK` and `ICICIBANK` are explicitly rejected in this phase; banks, NBFCs, insurers, and other financial-sector taxonomy families require a later dedicated adapter.
+
+Create one direct ignored inbox subdirectory per company and place exactly one unedited NSE Financial Results listing CSV inside it. The listing is the trusted source for official archive URLs and filing broadcast timestamps.
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m app.ingestion.nse.cli fundamentals-xbrl inspect --folder phase13-tcs --symbol TCS
+.\.venv\Scripts\python.exe -m app.ingestion.nse.cli fundamentals-xbrl acquire --folder phase13-tcs --symbol TCS --scope CONSOLIDATED --max-files 8 --max-bytes 67108864
+.\.venv\Scripts\python.exe -m app.ingestion.nse.cli fundamentals-xbrl dry-run --folder phase13-tcs --symbol TCS
+.\.venv\Scripts\python.exe -m app.ingestion.nse.cli fundamentals-xbrl import --folder phase13-tcs --symbol TCS
+```
+
+Use the same sequence with `phase13-infy` and `INFY`. Download the listing CSV through the normal official page UI after filtering the company and a range containing at least four independent reported quarters. Do not rename, edit, merge, or synthesize rows. If no listing CSV is available, acquisition is `UNAVAILABLE`; do not guess official artifact URLs.
+
+Acquisition writes a deterministic `fundamentals-xbrl-manifest.json` beside the ignored raw artifacts. It records the listing checksum and sorted artifact metadata: symbol, ISIN when verified, scope, official broadcast timestamp, official source URL, local filename, byte count, checksum, download state, bounded-retry state, and parser state. Existing files are never overwritten. A manifest checksum mismatch stops the run. Defaults limit a run to eight new artifacts and 64 MiB total; each response also remains subject to the existing 16 MiB ceiling and bounded official-client retries.
+
+`inspect` and `dry-run` never persist fundamental filings. Production import is allowed only after the strict dry-run succeeds with no rejected local XBRL artifact. Official broadcast time remains the sole availability boundary; download or parser execution time is never substituted.
 
 The deterministic import contract retains the official source filing identifier and timezone-aware submission/broadcast timestamp. Required columns are:
 

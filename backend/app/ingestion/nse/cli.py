@@ -9,7 +9,12 @@ from app.database.session import SessionLocal
 from app.ingestion.nse.artifacts import ArtifactValidationError
 from app.ingestion.nse.client import OfficialSourceError
 from app.ingestion.nse.definitions import ArtifactType, SOURCE_DEFINITIONS
-from app.ingestion.nse.ixbrl import download_fundamentals_ixbrl
+from app.ingestion.nse.ixbrl import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_FILES,
+    download_fundamentals_ixbrl,
+    prepare_fundamentals_ixbrl,
+)
 from app.ingestion.nse.service import NseIngestionService
 from app.services.data_sources import DataSourceCoverageService
 
@@ -128,6 +133,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ixbrl_download_parser.add_argument("bundle")
     ixbrl_download_parser.add_argument("--symbol", required=True)
+    ixbrl_download_parser.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES)
+    ixbrl_download_parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
+
+    xbrl_parser = subparsers.add_parser(
+        "fundamentals-xbrl",
+        help="Inspect, acquire, validate, or import an official NSE XBRL bundle",
+    )
+    xbrl_actions = xbrl_parser.add_subparsers(dest="xbrl_action", required=True)
+    for action in ("inspect", "dry-run", "import"):
+        action_parser = xbrl_actions.add_parser(action)
+        action_parser.add_argument("--folder", required=True)
+        action_parser.add_argument("--symbol", required=True)
+    acquire_parser = xbrl_actions.add_parser("acquire")
+    acquire_parser.add_argument("--folder", required=True)
+    acquire_parser.add_argument("--symbol", required=True)
+    acquire_parser.add_argument(
+        "--scope",
+        choices=("CONSOLIDATED", "STANDALONE"),
+        default="CONSOLIDATED",
+    )
+    acquire_parser.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES)
+    acquire_parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
 
     classifications_parser = subparsers.add_parser(
         "classifications", help="Import an official NSE Indices classification snapshot"
@@ -160,6 +187,21 @@ def _run(args: argparse.Namespace) -> object:
     if args.command == "fundamentals-ixbrl-download":
         return download_fundamentals_ixbrl(
             args.bundle,
+            symbol=args.symbol,
+            max_files=args.max_files,
+            max_bytes=args.max_bytes,
+        ).as_dict()
+    if args.command == "fundamentals-xbrl" and args.xbrl_action == "acquire":
+        return download_fundamentals_ixbrl(
+            args.folder,
+            symbol=args.symbol,
+            scope=args.scope,
+            max_files=args.max_files,
+            max_bytes=args.max_bytes,
+        ).as_dict()
+    if args.command == "fundamentals-xbrl" and args.xbrl_action == "inspect":
+        return prepare_fundamentals_ixbrl(
+            args.folder,
             symbol=args.symbol,
         ).as_dict()
     with SessionLocal() as session:
@@ -264,6 +306,12 @@ def _run(args: argparse.Namespace) -> object:
                 args.bundle,
                 symbol=args.symbol,
                 dry_run=args.dry_run,
+            )
+        if args.command == "fundamentals-xbrl":
+            return service.import_fundamentals_ixbrl(
+                args.folder,
+                symbol=args.symbol,
+                dry_run=args.xbrl_action == "dry-run",
             )
         if args.command == "classifications":
             return service.import_local(

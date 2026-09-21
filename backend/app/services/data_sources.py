@@ -6,6 +6,7 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.ingestion.nse.definitions import ArtifactType, DataOrigin, SOURCE_DEFINITIONS
+from app.ingestion.nse.ixbrl import SUPPORTED_TAXONOMY_FAMILIES
 from app.models import (
     CorporateAction,
     DailyPrice,
@@ -478,6 +479,41 @@ class DataSourceCoverageService:
         fundamental_fact_count = int(
             self.session.scalar(select(func.count()).select_from(FundamentalFact)) or 0
         )
+        mapped_fundamental_fact_count = int(
+            self.session.scalar(
+                select(func.count()).select_from(FundamentalFact).where(
+                    FundamentalFact.normalized_concept.is_not(None)
+                )
+            )
+            or 0
+        )
+        fundamental_nifty200_securities = (
+            int(
+                self.session.scalar(
+                    select(func.count(func.distinct(FundamentalFiling.security_id))).where(
+                        FundamentalFiling.security_id.in_(member_ids)
+                    )
+                )
+                or 0
+            )
+            if member_ids
+            else 0
+        )
+        encountered_taxonomy_namespaces = {
+            namespace
+            for metadata in self.session.scalars(select(FundamentalFact.fact_metadata))
+            if metadata
+            for namespace in [metadata.get("source_namespace")]
+            if isinstance(namespace, str) and namespace
+        }
+        supported_taxonomy_families = sorted(
+            SUPPORTED_TAXONOMY_FAMILIES[namespace]
+            for namespace in encountered_taxonomy_namespaces
+            if namespace in SUPPORTED_TAXONOMY_FAMILIES
+        )
+        unsupported_taxonomy_namespaces = sorted(
+            encountered_taxonomy_namespaces - set(SUPPORTED_TAXONOMY_FAMILIES)
+        )
         consolidated_filing_count = int(
             self.session.scalar(
                 select(func.count()).select_from(FundamentalFiling).where(
@@ -675,9 +711,23 @@ class DataSourceCoverageService:
                 metrics={
                     "filings": int(filing_count or 0),
                     "facts": fundamental_fact_count,
+                    "mapped_facts": mapped_fundamental_fact_count,
+                    "unmapped_facts": (
+                        fundamental_fact_count - mapped_fundamental_fact_count
+                    ),
                     "securities": int(filing_securities or 0),
+                    "nifty200_securities": fundamental_nifty200_securities,
                     "consolidated_filings": consolidated_filing_count,
                     "standalone_filings": int(filing_count or 0) - consolidated_filing_count,
+                    "supported_taxonomy_families": ",".join(
+                        supported_taxonomy_families
+                    ),
+                    "unsupported_taxonomy_families": ",".join(
+                        unsupported_taxonomy_namespaces
+                    ),
+                    "unsupported_taxonomy_family_count": len(
+                        unsupported_taxonomy_namespaces
+                    ),
                     "earliest_availability": filing_start.isoformat() if filing_start else None,
                     "latest_availability": filing_end.isoformat() if filing_end else None,
                     "earliest_period_end": str(filing_period_start) if filing_period_start else None,

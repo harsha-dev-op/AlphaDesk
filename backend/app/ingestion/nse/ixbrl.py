@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -29,9 +30,17 @@ SUPPORTED_TAXONOMY_NAMESPACES = {
     "http://www.sebi.gov.in/xbrl/2025-01-31/in-capmkt",
     "http://www.sebi.gov.in/xbrl/2026-01-31/in-capmkt",
 }
+SUPPORTED_TAXONOMY_FAMILIES = {
+    "http://www.sebi.gov.in/xbrl/2025-01-31/in-capmkt": "SEBI_IN_CAPMKT_2025",
+    "http://www.sebi.gov.in/xbrl/2026-01-31/in-capmkt": "SEBI_IN_CAPMKT_2026",
+}
+PHASE13D_EXCLUDED_FINANCIAL_SYMBOLS = frozenset({"HDFCBANK", "ICICIBANK"})
+MANIFEST_FILE_NAME = "fundamentals-xbrl-manifest.json"
+DEFAULT_MAX_FILES = 8
+DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 IST = ZoneInfo("Asia/Kolkata")
 ADAPTER_CODE = "NSE_INTEGRATED_FINANCIAL_XBRL"
-ADAPTER_VERSION = "1"
+ADAPTER_VERSION = "2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +92,8 @@ class BundleReport:
     latest_available_at: datetime | None
     scopes: tuple[str, ...]
     audit_statuses: tuple[str, ...]
+    supported_taxonomy_families: tuple[str, ...]
+    unsupported_taxonomy_namespaces: tuple[str, ...]
     raw_checksums: dict[str, str]
 
     @property
@@ -109,6 +120,10 @@ class BundleReport:
             "latest_available_at": self.latest_available_at,
             "scopes": list(self.scopes),
             "audit_statuses": list(self.audit_statuses),
+            "supported_taxonomy_families": list(self.supported_taxonomy_families),
+            "unsupported_taxonomy_namespaces": list(
+                self.unsupported_taxonomy_namespaces
+            ),
             "raw_checksums": self.raw_checksums,
         }
 
@@ -119,6 +134,10 @@ class DownloadReport:
     listing_rows: int
     downloaded: tuple[str, ...]
     already_present: tuple[str, ...]
+    skipped_by_limit: tuple[str, ...]
+    downloaded_bytes: int
+    manifest_file: str
+    manifest_sha256: str
     checksums: dict[str, str]
 
     def as_dict(self) -> dict[str, object]:
@@ -127,8 +146,23 @@ class DownloadReport:
             "listing_rows_matched_by_symbol": self.listing_rows,
             "downloaded": list(self.downloaded),
             "already_present": list(self.already_present),
+            "skipped_by_limit": list(self.skipped_by_limit),
+            "downloaded_bytes": self.downloaded_bytes,
+            "manifest_file": self.manifest_file,
+            "manifest_sha256": self.manifest_sha256,
             "checksums": self.checksums,
         }
+
+
+def _validate_phase_scope(symbol: str) -> str:
+    normalized = symbol.strip().upper()
+    if not normalized:
+        raise ArtifactValidationError("XBRL symbol is required")
+    if normalized in PHASE13D_EXCLUDED_FINANCIAL_SYMBOLS:
+        raise ArtifactValidationError(
+            f"Phase 13D excludes financial-sector symbol {normalized}"
+        )
+    return normalized
 
 
 def _sha256(content: bytes) -> str:
@@ -229,16 +263,31 @@ def download_fundamentals_ixbrl(
     value: str | Path,
     *,
     symbol: str,
+    scope: str | None = None,
+    max_files: int = DEFAULT_MAX_FILES,
+    max_bytes: int = DEFAULT_MAX_BYTES,
     store: NseArtifactStore | None = None,
     client: OfficialHttpClient | None = None,
 ) -> DownloadReport:
     """Download only exact official XBRL links from an operator-supplied listing."""
-    symbol = symbol.strip().upper()
-    if symbol != "RELIANCE":
-        raise ArtifactValidationError("Phase 13C XBRL retrieval is restricted to RELIANCE")
+    symbol = _validate_phase_scope(symbol)
+    normalized_scope = scope.strip().upper() if scope else None
+    if normalized_scope not in {None, "CONSOLIDATED", "STANDALONE"}:
+        raise ArtifactValidationError("Acquisition scope must be CONSOLIDATED or STANDALONE")
+    if not 1 <= max_files <= 100:
+        raise ArtifactValidationError("max_files must be between 1 and 100")
+    if not 1 <= max_bytes <= 512 * 1024 * 1024:
+        raise ArtifactValidationError("max_bytes must be between 1 and 536870912")
     artifact_store = store or NseArtifactStore()
     directory, listing_path = _resolve_bundle(value, artifact_store)
-    listings = _listing_rows(_read_bounded(listing_path), symbol)
+    listing_content = _read_bounded(listing_path)
+    listings = [
+        item
+        for item in _listing_rows(listing_content, symbol)
+        if normalized_scope is None or item.scope == normalized_scope
+    ]
+    if not listings:
+        raise ArtifactValidationError("No listing rows matched the requested filing scope")
     by_name: dict[str, ListingRow] = {}
     for item in listings:
         name = validate_file_name(item.xbrl_file_name)
@@ -247,35 +296,94 @@ def download_fundamentals_ixbrl(
             raise ArtifactValidationError(f"Conflicting listing locators for {name}")
         by_name[name] = item
 
+    manifest_path = (directory / MANIFEST_FILE_NAME).resolve()
+    prior_entries: dict[str, dict[str, object]] = {}
+    if manifest_path.exists():
+        try:
+            prior = json.loads(_read_bounded(manifest_path).decode("utf-8"))
+            prior_entries = {
+                str(entry["local_filename"]): entry
+                for entry in prior.get("artifacts", [])
+            }
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ArtifactValidationError("The XBRL acquisition manifest is malformed") from exc
+
     downloaded: list[str] = []
     already_present: list[str] = []
+    skipped_by_limit: list[str] = []
     checksums: dict[str, str] = {}
+    manifest_entries: list[dict[str, object]] = []
+    downloaded_bytes = 0
     owned_client = client is None
     http = client or OfficialHttpClient()
     try:
         for name in sorted(by_name):
+            listing = by_name[name]
             destination = (directory / name).resolve()
             if destination.parent != directory.resolve():
                 raise ArtifactValidationError("XBRL destination escaped the bundle directory")
             if destination.exists():
+                existing_content = _read_bounded(destination)
+                checksum = _sha256(existing_content)
+                prior_checksum = str(prior_entries.get(name, {}).get("sha256", ""))
+                if prior_checksum and prior_checksum != checksum:
+                    raise ArtifactValidationError(
+                        f"Existing XBRL checksum does not match its manifest: {name}"
+                    )
                 already_present.append(name)
-                checksums[name] = _sha256(_read_bounded(destination))
+                checksums[name] = checksum
+                previous = prior_entries.get(name)
+                if previous and prior_checksum:
+                    manifest_entries.append(previous)
+                else:
+                    isin = _validate_downloaded_xbrl(existing_content, name, symbol)
+                    manifest_entries.append(
+                        _manifest_entry(
+                            listing,
+                            checksum=checksum,
+                            byte_count=destination.stat().st_size,
+                            download_status="VERIFIED_EXISTING",
+                            retry_status="NOT_REQUIRED",
+                            parser_status="XBRL_ROOT_AND_IDENTITY_VALIDATED",
+                            isin=isin,
+                        )
+                    )
+                continue
+            if len(downloaded) >= max_files:
+                skipped_by_limit.append(name)
+                manifest_entries.append(
+                    _manifest_entry(
+                        listing,
+                        checksum="",
+                        byte_count=0,
+                        download_status="SKIPPED_BY_FILE_LIMIT",
+                        retry_status="NOT_ATTEMPTED",
+                        parser_status="NOT_AVAILABLE",
+                        isin=None,
+                    )
+                )
                 continue
             response = http.fetch(
-                by_name[name].xbrl_url,
+                listing.xbrl_url,
                 allowed_content_types=frozenset(
                     {"application/xml", "text/xml", "application/octet-stream", "text/plain"}
                 ),
             )
-            lowered = response.content.lower()
-            if b"<!doctype" in lowered or b"<!entity" in lowered:
-                raise ArtifactValidationError("DTD/entity declarations are not permitted in XBRL artifacts")
-            try:
-                root = ElementTree.fromstring(response.content)
-            except ElementTree.ParseError as exc:
-                raise ArtifactValidationError(f"Downloaded XBRL is malformed: {name}") from exc
-            if _tag_parts(root.tag) != (XBRLI, "xbrl"):
-                raise ArtifactValidationError(f"Downloaded artifact is not XBRL: {name}")
+            if downloaded_bytes + len(response.content) > max_bytes:
+                skipped_by_limit.append(name)
+                manifest_entries.append(
+                    _manifest_entry(
+                        listing,
+                        checksum="",
+                        byte_count=len(response.content),
+                        download_status="SKIPPED_BY_BYTE_LIMIT",
+                        retry_status="BOUNDED_CLIENT_COMPLETE",
+                        parser_status="NOT_PERSISTED",
+                        isin=None,
+                    )
+                )
+                continue
+            isin = _validate_downloaded_xbrl(response.content, name, symbol)
             try:
                 with destination.open("xb") as stream:
                     stream.write(response.content)
@@ -286,17 +394,74 @@ def download_fundamentals_ixbrl(
                 checksums[name] = _sha256(_read_bounded(destination))
                 continue
             downloaded.append(name)
-            checksums[name] = _sha256(response.content)
+            downloaded_bytes += len(response.content)
+            checksum = _sha256(response.content)
+            checksums[name] = checksum
+            manifest_entries.append(
+                _manifest_entry(
+                    listing,
+                    checksum=checksum,
+                    byte_count=len(response.content),
+                    download_status="DOWNLOADED",
+                    retry_status="BOUNDED_CLIENT_COMPLETE",
+                    parser_status="XBRL_ROOT_AND_IDENTITY_VALIDATED",
+                    isin=isin,
+                )
+            )
     finally:
         if owned_client:
             http.close()
+    manifest = {
+        "manifest_version": "1",
+        "adapter": f"{ADAPTER_CODE} v{ADAPTER_VERSION}",
+        "symbol": symbol,
+        "scope": normalized_scope or "ALL",
+        "listing_file": listing_path.name,
+        "listing_sha256": _sha256(listing_content),
+        "artifacts": sorted(manifest_entries, key=lambda item: str(item["local_filename"])),
+        "limits": {"max_files": max_files, "max_bytes": max_bytes},
+    }
+    manifest_content = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if not manifest_path.exists() or manifest_path.read_bytes() != manifest_content:
+        temporary = manifest_path.with_suffix(".json.partial")
+        temporary.write_bytes(manifest_content)
+        os.replace(temporary, manifest_path)
     return DownloadReport(
         listing_file=listing_path.name,
         listing_rows=len(listings),
         downloaded=tuple(downloaded),
         already_present=tuple(already_present),
+        skipped_by_limit=tuple(skipped_by_limit),
+        downloaded_bytes=downloaded_bytes,
+        manifest_file=MANIFEST_FILE_NAME,
+        manifest_sha256=_sha256(manifest_content),
         checksums=checksums,
     )
+
+
+def _manifest_entry(
+    listing: ListingRow,
+    *,
+    checksum: str,
+    byte_count: int,
+    download_status: str,
+    retry_status: str,
+    parser_status: str,
+    isin: str | None,
+) -> dict[str, object]:
+    return {
+        "symbol": listing.symbol,
+        "isin": isin,
+        "scope": listing.scope,
+        "filing_broadcast_at": listing.broadcast_at.isoformat(),
+        "source_url": listing.xbrl_url,
+        "local_filename": listing.xbrl_file_name,
+        "sha256": checksum,
+        "bytes": byte_count,
+        "download_status": download_status,
+        "retry_status": retry_status,
+        "parser_status": parser_status,
+    }
 
 
 def _tag_parts(tag: str) -> tuple[str, str]:
@@ -304,6 +469,37 @@ def _tag_parts(tag: str) -> tuple[str, str]:
         namespace, local = tag[1:].split("}", 1)
         return namespace, local
     return "", tag
+
+
+def _identity_facts(root: ElementTree.Element) -> dict[str, str]:
+    return {
+        _tag_parts(item.tag)[1]: (item.text or "").strip()
+        for item in root
+        if item.attrib.get("contextRef")
+        and _tag_parts(item.tag)[1]
+        in {"Symbol", "ISIN", "NatureOfReportStandaloneConsolidated"}
+    }
+
+
+def _validate_downloaded_xbrl(content: bytes, name: str, symbol: str) -> str:
+    lowered = content.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise ArtifactValidationError("DTD/entity declarations are not permitted in XBRL artifacts")
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError as exc:
+        raise ArtifactValidationError(f"Downloaded XBRL is malformed: {name}") from exc
+    if _tag_parts(root.tag) != (XBRLI, "xbrl"):
+        raise ArtifactValidationError(f"Downloaded artifact is not XBRL: {name}")
+    identity = _identity_facts(root)
+    if identity.get("Symbol", "").upper() != symbol:
+        raise ArtifactValidationError(
+            f"Downloaded XBRL symbol does not match the listing: {name}"
+        )
+    isin = identity.get("ISIN", "").upper()
+    if len(isin) != 12 or not isin.isalnum():
+        raise ArtifactValidationError(f"Downloaded XBRL ISIN is malformed: {name}")
+    return isin
 
 
 def _contexts(root: ElementTree.Element) -> dict[str, XbrlContext]:
@@ -392,8 +588,12 @@ NORMALIZED_HEADERS = (
 
 
 def _parse_instance(
-    content: bytes, listing: ListingRow, file_name: str, raw_sha256: str
-) -> tuple[list[dict[str, object]], int]:
+    content: bytes,
+    listing: ListingRow,
+    file_name: str,
+    raw_sha256: str,
+    expected_isin: str | None,
+) -> tuple[list[dict[str, object]], int, set[str]]:
     lowered = content.lower()
     if b"<!doctype" in lowered or b"<!entity" in lowered:
         raise ArtifactValidationError("DTD/entity declarations are not permitted in XBRL artifacts")
@@ -418,6 +618,16 @@ def _parse_instance(
         and not item.dimensions and item.end == listing.period_end
     }
     facts = [element for element in root if element.attrib.get("contextRef") in selected_contexts]
+    fact_namespaces = {
+        _tag_parts(element.tag)[0]
+        for element in facts
+        if element.attrib.get("unitRef")
+    }
+    unsupported = sorted(fact_namespaces - SUPPORTED_TAXONOMY_NAMESPACES)
+    if unsupported:
+        raise ArtifactValidationError(
+            "Unsupported XBRL taxonomy namespace: " + ", ".join(unsupported)
+        )
     identity = {
         _tag_parts(item.tag)[1]: (item.text or "").strip()
         for item in facts
@@ -428,6 +638,8 @@ def _parse_instance(
     isin = identity.get("ISIN", "").upper()
     if len(isin) != 12 or not isin.isalnum():
         raise ArtifactValidationError("XBRL ISIN is malformed")
+    if expected_isin and isin != expected_isin.strip().upper():
+        raise ArtifactValidationError("XBRL ISIN does not match the official security master")
     if identity.get("NatureOfReportStandaloneConsolidated", "").upper() != listing.scope:
         raise ArtifactValidationError("XBRL scope does not match the listing row")
     fiscal_year, fiscal_quarter = _quarter(listing.period_end)
@@ -489,18 +701,17 @@ def _parse_instance(
         )
     if not rows:
         raise ArtifactValidationError("The linked XBRL filing has no eligible numeric facts")
-    return rows, len(contexts)
+    return rows, len(contexts), fact_namespaces
 
 
 def prepare_fundamentals_ixbrl(
     value: str | Path,
     *,
     symbol: str,
+    expected_isin: str | None = None,
     store: NseArtifactStore | None = None,
 ) -> BundleReport:
-    symbol = symbol.strip().upper()
-    if symbol != "RELIANCE":
-        raise ArtifactValidationError("Phase 13C XBRL activation is restricted to RELIANCE")
+    symbol = _validate_phase_scope(symbol)
     artifact_store = store or NseArtifactStore()
     directory, listing_path = _resolve_bundle(value, artifact_store)
     listing_content = _read_bounded(listing_path)
@@ -515,6 +726,8 @@ def prepare_fundamentals_ixbrl(
     normalized_rows: list[dict[str, object]] = []
     raw_checksums = {listing_path.name: _sha256(listing_content)}
     context_count = 0
+    taxonomy_namespaces: set[str] = set()
+    unsupported_taxonomy_namespaces: set[str] = set()
     matched = 0
     linked_listings: list[ListingRow] = []
     for path in xml_paths:
@@ -526,12 +739,24 @@ def prepare_fundamentals_ixbrl(
         checksum = _sha256(content)
         raw_checksums[path.name] = checksum
         try:
-            rows, contexts = _parse_instance(content, candidates[0], path.name, checksum)
+            rows, contexts, namespaces = _parse_instance(
+                content,
+                candidates[0],
+                path.name,
+                checksum,
+                expected_isin,
+            )
         except ArtifactValidationError as exc:
+            prefix = "Unsupported XBRL taxonomy namespace: "
+            if str(exc).startswith(prefix):
+                unsupported_taxonomy_namespaces.update(
+                    item.strip() for item in str(exc)[len(prefix):].split(",")
+                )
             rejected.append(f"{path.name}: {exc}")
             continue
         normalized_rows.extend(rows)
         context_count += contexts
+        taxonomy_namespaces.update(namespaces)
         matched += 1
         linked_listings.append(candidates[0])
     if not normalized_rows:
@@ -564,5 +789,11 @@ def prepare_fundamentals_ixbrl(
         latest_available_at=max((item.broadcast_at for item in linked_listings), default=None),
         scopes=tuple(sorted({item.scope for item in linked_listings})),
         audit_statuses=tuple(sorted({item.audit_status for item in linked_listings})),
+        supported_taxonomy_families=tuple(
+            sorted(SUPPORTED_TAXONOMY_FAMILIES[item] for item in taxonomy_namespaces)
+        ),
+        unsupported_taxonomy_namespaces=tuple(
+            sorted(unsupported_taxonomy_namespaces)
+        ),
         raw_checksums=raw_checksums,
     )
